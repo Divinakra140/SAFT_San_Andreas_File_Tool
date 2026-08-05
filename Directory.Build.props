@@ -1,0 +1,17 @@
+<Project>
+
+  <!--
+    This repo lives on an exFAT SD card. macOS silently drops "._*" AppleDouble
+    sidecar files next to every file written here (to hold xattrs exFAT can't
+    store natively), and MSBuild's default item globs would otherwise try to
+    compile them as source. Exclude them everywhere.
+  -->
+  <ItemGroup>
+    <Compile Remove="**/._*" />
+    <Compile Remove="**/._*/**" />
+    <Content Remove="**/._*" />
+    <None Remove="**/._*" />
+    <EmbeddedResource Remove="**/._*" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,291 @@
+<Window x:Class="SAFT.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SAFT — San Andreas File Tool" Height="760" Width="1040"
+        MinHeight="600" MinWidth="880">
+    <!-- Clouds cover the whole window; only the tab work-area (below) is carved out as opaque white. -->
+    <Window.Background>
+        <ImageBrush ImageSource="Assets/clouds_panel_bg.jpg" Stretch="UniformToFill" />
+    </Window.Background>
+    <Grid Margin="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <StackPanel Grid.Column="0" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="10,20,10,20">
+            <Image Source="Assets/icon_s.png" Width="150" Height="150" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,32" />
+            <Image Source="Assets/panel/replaces.png" Width="118" Height="34" HorizontalAlignment="Center" Margin="0,0,0,20" />
+            <Image Source="Assets/panel/models.png" Width="84" Height="23" HorizontalAlignment="Center" Margin="0,0,0,6" />
+            <Image Source="Assets/panel/collision.png" Width="96" Height="24" HorizontalAlignment="Center" Margin="0,0,0,6" />
+            <Image Source="Assets/panel/textures.png" Width="102" Height="24" HorizontalAlignment="Center" Margin="0,0,0,6" />
+            <Image Source="Assets/panel/animations.png" Width="112" Height="24" HorizontalAlignment="Center" Margin="0,0,0,6" />
+            <Image Source="Assets/panel/audio.png" Width="68" Height="22" HorizontalAlignment="Center" Margin="0,0,0,36" />
+            <Image Source="Assets/panel/works_with.png" Width="91" Height="65" HorizontalAlignment="Center" Margin="0,0,0,20" />
+            <Image Source="Assets/panel/any_pc_game_version.png" Width="84" Height="63" HorizontalAlignment="Center" Margin="0,0,0,2" />
+            <Image Source="Assets/panel/of_gta_san_andreas.png" Width="114" Height="65" HorizontalAlignment="Center" />
+        </StackPanel>
+
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="0,6,0,16">
+                <Image Source="Assets/panel/title_wordmark.png" Width="480" Height="56" Stretch="Uniform" HorizontalAlignment="Center" />
+                <Image Source="Assets/panel/title_byline.png" Width="220" Height="48" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,2,0,0" />
+            </StackPanel>
+
+            <!-- The "work window" the user described: tab strip through the bottom of the log, opaque white regardless of the clouds behind everything else. -->
+            <Border Grid.Row="1" Background="White">
+            <TabControl>
+
+                <!-- ================= TAB 1: EXTRACT ================= -->
+                <TabItem Header="Extract Game Files">
+                    <Grid Margin="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0">
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Game folder:" VerticalAlignment="Center" Width="110" />
+                                <TextBox Grid.Column="1" x:Name="GameFolderBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseGameFolder" />
+                            </Grid>
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Destination:" VerticalAlignment="Center" Width="110" />
+                                <TextBox Grid.Column="1" x:Name="ExtractDestBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseExtractDest" />
+                            </Grid>
+
+                            <CheckBox x:Name="ExtractAudioCheckBox" Margin="0,0,0,8"
+                                      Checked="OnExtractAudioOptionChanged" Unchecked="OnExtractAudioOptionChanged">
+                                <TextBlock TextWrapping="Wrap"
+                                           Text="Extract Audio Files as well? (takes much longer and extracted folder takes up more storage)" />
+                            </CheckBox>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="Scan" Width="100" Click="OnScan" />
+                                <Button Content="Extract" Width="100" Margin="8,0,0,0" Click="OnExtract" x:Name="ExtractButton" IsEnabled="False" />
+                            </StackPanel>
+
+                            <TextBlock x:Name="ScanSummaryText" Margin="0,0,0,4" TextWrapping="Wrap" />
+                            <TextBlock x:Name="ExtractWarningText" Margin="0,0,0,8" TextWrapping="Wrap" FontWeight="Bold" Foreground="DarkRed" />
+
+                            <TextBlock x:Name="ExtractSubProgressText" Margin="0,0,0,2" FontSize="11" Foreground="Gray" Text=" " />
+                            <ProgressBar x:Name="ExtractSubProgressBar" Height="8" Minimum="0" Maximum="100" Margin="0,0,0,6" />
+
+                            <ProgressBar x:Name="ExtractProgressBar" Height="18" Margin="0,0,0,8" Minimum="0" Maximum="100" />
+                        </StackPanel>
+
+                        <ListBox Grid.Row="1" x:Name="ExtractLogList" FontFamily="Consolas" />
+                    </Grid>
+                </TabItem>
+
+                <!-- ================= TAB 2: INSTALL MOD INTO EXTRACTED ================= -->
+                <TabItem Header="Install Mod(s) into Extracted">
+                    <Grid Margin="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0">
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Extracted Game Folder:" VerticalAlignment="Center" Width="150" />
+                                <TextBox Grid.Column="1" x:Name="InstallExtractionFolderBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseExtractionFolderForInstall" />
+                            </Grid>
+
+                            <TextBlock x:Name="InstallManifestSummaryText" Margin="0,0,0,8" TextWrapping="Wrap" />
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Mod folder:" VerticalAlignment="Center" Width="150" />
+                                <TextBox Grid.Column="1" x:Name="ModSourceFolderBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseModSourceFolder" />
+                            </Grid>
+
+                            <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" Foreground="Gray"
+                                       Text="Point this at the folder you unzipped a mod pack into and SAFT matches each file by name and copies it into the right archive automatically, no matter what subfolder structure the mod uses. Audio mod files need to be in the correct nested folder structure and cannot be loose files, and only match sounds/tracks you extracted with &quot;Extract Audio Files as well?&quot; checked. Files that don't match anything original are listed as unmatched below for manual placement. See Readme.txt for more info on audio." />
+
+                            <Button Content="Install Mod into Extracted Game Folder" Width="260" HorizontalAlignment="Left"
+                                    Click="OnInstallMod" x:Name="InstallButton" IsEnabled="False" Margin="0,0,0,8" />
+
+                            <TextBlock x:Name="InstallSubProgressText" Margin="0,0,0,2" FontSize="11" Foreground="Gray" Text=" " />
+                            <ProgressBar x:Name="InstallSubProgressBar" Height="8" Minimum="0" Maximum="100" Margin="0,0,0,8" />
+                        </StackPanel>
+
+                        <ListBox Grid.Row="1" x:Name="InstallLogList" FontFamily="Consolas" />
+                    </Grid>
+                </TabItem>
+
+                <!-- ================= TAB 3: REBUILD FROM EXTRACTED ================= -->
+                <TabItem Header="Rebuild from Extracted">
+                    <Grid Margin="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0">
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Extracted Game Folder:" VerticalAlignment="Center" Width="150" />
+                                <TextBox Grid.Column="1" x:Name="ExtractionFolderBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseExtractionFolder" />
+                            </Grid>
+
+                            <TextBlock x:Name="ManifestSummaryText" Margin="0,0,0,8" TextWrapping="Wrap" />
+
+                            <StackPanel Margin="0,0,0,8">
+                                <RadioButton x:Name="NewFolderOption"
+                                             IsChecked="True" GroupName="OutputMode" Checked="OnOutputModeChanged">
+                                    <TextBlock x:Name="NewFolderOptionText" TextWrapping="Wrap"
+                                               Text="Rebuild into a new folder (safe, non-destructive) — calculating size…" />
+                                </RadioButton>
+                                <RadioButton x:Name="InPlaceWithBackupOption"
+                                             GroupName="OutputMode" Checked="OnOutputModeChanged" Margin="0,6,0,0">
+                                    <TextBlock x:Name="InPlaceWithBackupOptionText" TextWrapping="Wrap"
+                                               Text="Install over the original game files (backs up each archive as .img.bak first, inside the corresponding folder within the rebuilt game directory) — calculating size…" />
+                                </RadioButton>
+                                <RadioButton x:Name="InPlaceNoBackupOption"
+                                             GroupName="OutputMode" Checked="OnOutputModeChanged" Margin="0,6,0,0">
+                                    <TextBlock TextWrapping="Wrap" Text="Install over original game files without .img backups" />
+                                </RadioButton>
+                            </StackPanel>
+
+                            <Grid x:Name="RebuildDestRow" Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Output folder:" VerticalAlignment="Center" Width="110" />
+                                <TextBox Grid.Column="1" x:Name="RebuildDestBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseRebuildDest" />
+                            </Grid>
+
+                            <TextBlock x:Name="InPlaceWarningText"
+                                       Text="This will overwrite the archives in your game install. A .img.bak backup of each original is made automatically before the first overwrite, inside the corresponding folder within the rebuilt game directory."
+                                       Foreground="DarkRed" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,8" />
+
+                            <TextBlock x:Name="NoBackupWarningText"
+                                       Text="WARNING! This is an irreversible and permanent replacement of your game files, so make sure to back up the clean game in case any mods are no longer preferred in the future."
+                                       Foreground="DarkRed" FontWeight="Bold" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,8" />
+
+                            <Button Content="Rebuild" Width="100" HorizontalAlignment="Left" Click="OnRebuild" x:Name="RebuildButton" IsEnabled="False" Margin="0,0,0,8" />
+
+                            <TextBlock x:Name="RebuildSubProgressText" Margin="0,0,0,2" FontSize="11" Foreground="Gray" Text=" " />
+                            <ProgressBar x:Name="RebuildSubProgressBar" Height="8" Minimum="0" Maximum="100" Margin="0,0,0,6" />
+
+                            <ProgressBar x:Name="RebuildProgressBar" Height="18" Margin="0,0,0,8" Minimum="0" Maximum="100" />
+                        </StackPanel>
+
+                        <ListBox Grid.Row="1" x:Name="RebuildLogList" FontFamily="Consolas" />
+                    </Grid>
+                </TabItem>
+
+                <!-- ================= TAB 4: INSTALL MOD WITHOUT EXTRACTION ================= -->
+                <TabItem Header="Install Mod(s) without extraction">
+                    <Grid Margin="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0">
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Game folder:" VerticalAlignment="Center" Width="110" />
+                                <TextBox Grid.Column="1" x:Name="DirectGameFolderBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseDirectGameFolder" />
+                            </Grid>
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Mod folder:" VerticalAlignment="Center" Width="110" />
+                                <TextBox Grid.Column="1" x:Name="DirectModFolderBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseDirectModFolder" />
+                            </Grid>
+
+                            <StackPanel Margin="0,0,0,8">
+                                <RadioButton x:Name="DirectBackupOption"
+                                             Content="Back up original files before replacing (recommended)"
+                                             IsChecked="True" GroupName="DirectBackupMode" Checked="OnDirectBackupModeChanged" />
+                                <RadioButton x:Name="DirectNoBackupOption"
+                                             Content="Replace files without backups — WARNING: permanent and irreversible"
+                                             GroupName="DirectBackupMode" Checked="OnDirectBackupModeChanged" Margin="0,6,0,0" />
+                            </StackPanel>
+
+                            <Grid x:Name="DirectBackupDestRow" Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Backup folder:" VerticalAlignment="Center" Width="110" />
+                                <TextBox Grid.Column="1" x:Name="DirectBackupDestBox" VerticalAlignment="Center" Margin="4,0" IsReadOnly="True" />
+                                <Button Grid.Column="2" Content="Browse…" Width="90" Click="OnBrowseDirectBackupDest" />
+                            </Grid>
+
+                            <TextBlock x:Name="DirectNoBackupWarningText"
+                                       Text="WARNING! No backups will be made. Replaced files cannot be recovered through SAFT — make sure you have a clean copy of the game elsewhere before continuing."
+                                       Foreground="DarkRed" FontWeight="Bold" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,0,0,8" />
+
+                            <TextBlock Margin="0,0,0,8" TextWrapping="Wrap" Foreground="Gray"
+                                       Text="This is the fast and popular option that installs your mod files directly into the live game archives, without extracting them. If you get a message about rebuilding, just say yes, its a necessary step if your mod files are any bigger than the vanilla files they replace. Audio mod files need to be in the correct nested folder structure and cannot be loose files, all other asset types can be loose. See Readme.txt for more info on audio." />
+
+                            <Button Content="Install Mod into Game Files" Width="200" HorizontalAlignment="Left"
+                                    Click="OnDirectInstall" x:Name="DirectInstallButton" IsEnabled="False" Margin="0,0,0,8" />
+
+                            <TextBlock x:Name="DirectSubProgressText" Margin="0,0,0,2" FontSize="11" Foreground="Gray" Text=" " />
+                            <ProgressBar x:Name="DirectSubProgressBar" Height="8" Minimum="0" Maximum="100" Margin="0,0,0,6" />
+
+                            <ProgressBar x:Name="DirectProgressBar" Height="18" Margin="0,0,0,8" Minimum="0" Maximum="100" />
+                        </StackPanel>
+
+                        <ListBox Grid.Row="1" x:Name="DirectLogList" FontFamily="Consolas" />
+                    </Grid>
+                </TabItem>
+
+            </TabControl>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

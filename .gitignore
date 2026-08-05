@@ -1,0 +1,11 @@
+bin/
+obj/
+publish/
+.tools/
+._*
+.DS_Store
+
+# Published portable exes (~150MB+ each) — rebuild with `dotnet publish`
+# (see README.md), then attach to a GitHub Release instead of committing.
+32-bit SAFT/
+64-bit SAFT/

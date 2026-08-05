@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    NOTE: this project targets net8.0-windows and uses WPF, which can only be
+    restored/built/run on Windows (the .NET SDK doesn't ship WPF's designer/
+    compiler tooling for macOS or Linux). It was written without being able
+    to compile it — build and smoke-test it here before relying on it.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>..\..\assets\SAFT.ico</ApplicationIcon>
+    <AssemblyName>SAFT</AssemblyName>
+    <RootNamespace>SAFT.App</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SAFT.Core\SAFT.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Baked into the single-file publish so the exe needs no external image files at runtime. -->
+    <Resource Include="..\..\assets\icon_s.png">
+      <Link>Assets\icon_s.png</Link>
+    </Resource>
+    <!--
+      Swapped between the two "which clouds look" builds: clouds_giant.jpg (single large image,
+      Stretch=UniformToFill in XAML) vs clouds_medium.jpg (small image, TileMode=Tile in XAML).
+      Same Link target both times so the XAML resource reference never has to change.
+    -->
+    <Resource Include="..\..\assets\panel\clouds_giant.jpg">
+      <Link>Assets\clouds_panel_bg.jpg</Link>
+    </Resource>
+    <Resource Include="..\..\assets\panel\replaces.png"><Link>Assets\panel\replaces.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\models.png"><Link>Assets\panel\models.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\collision.png"><Link>Assets\panel\collision.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\textures.png"><Link>Assets\panel\textures.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\animations.png"><Link>Assets\panel\animations.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\audio.png"><Link>Assets\panel\audio.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\works_with.png"><Link>Assets\panel\works_with.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\any_pc_game_version.png"><Link>Assets\panel\any_pc_game_version.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\of_gta_san_andreas.png"><Link>Assets\panel\of_gta_san_andreas.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\title_wordmark.png"><Link>Assets\panel\title_wordmark.png</Link></Resource>
+    <Resource Include="..\..\assets\panel\title_byline.png"><Link>Assets\panel\title_byline.png</Link></Resource>
+  </ItemGroup>
+
+  <!--
+    A WPF <SplashScreen> item was tried here and removed — it's the one mechanism that runs
+    before any window or app code, so a resource-path mismatch there can crash the app before
+    anything is ever shown on screen (no console, no visible error). Not worth the risk for a
+    purely cosmetic loading image; skip it rather than debug a mechanism that can't be tested
+    without a Windows machine.
+  -->
+
+</Project>
