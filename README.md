@@ -81,17 +81,18 @@ extract if you have some free space available. SAFT will warn you about storage 
 You can also use your extracted folder as a backup, which will give you the confidence
 to use SAFT'S quicker and more destructive modding tools with ease, knowing everything is backed up
 in your extraction folder. By quick and destructive I am referring the last option all the way on the
-right called "Install Mod(s) without Extraction" > "Replace files without backups" this is the most
-destructive tool contained within SAFT and allows you replace files instantaneously within your game
-directory without extracting anything or backing anything up. It's like going through a drive through
-and ordering some chicken and meanwhile your pistons get replaced out of nowhere. This works very fast
-as long as you don't try to replace with any huge files. If SAFT notices that the mod files you are
-providing are bigger in size than the vanilla files they replace, it will tell you that the archive
-needs rebuilding. You can tell it no, and stop the file replacement before it happens, or you can say,
-"yes" and it will still work just as seamlessly as with small files, but it will take a bit longer.
-Thats because SAFT is not only replacing a file, its gotta make room for your big files and rebuild
-the archive around it. The "archive" its referring to is the "gta3.img" or "player.img" that all the
-individual game files are contained within.
+right called "Install Mod(s) without Extraction" > "Replace files without backups"
+<img width="1301" height="768" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/cropped%20tab4.png" />
+this is the most destructive tool contained within SAFT and allows you to replace files instantaneously
+within your game directory without extracting anything or backing anything up. It's like going through 
+a drive through and ordering some chicken and meanwhile your pistons get replaced out of nowhere. This
+works very fast as long as you don't try to replace with any huge files. If SAFT notices that the mod 
+files you are providing are bigger in size than the vanilla files they replace, it will tell you that
+the archive needs rebuilding. You can tell it no, and stop the file replacement before it happens, or 
+you can say, "yes" and it will still work just as seamlessly as with small files, but it will take a 
+bit longer. Thats because SAFT is not only replacing a file, its gotta make room for your big files 
+and rebuild the archive around it. The "archive" its referring to is the "gta3.img" or "player.img" 
+that all the individual game files are contained within.
 
 Note* SAFT works with mods that use Cleo to load their assets, as long as the assets are named the same
 as they are named in the original game. SAFT will permanently load those mod files into your directory
