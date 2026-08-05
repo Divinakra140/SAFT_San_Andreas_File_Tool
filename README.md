@@ -82,7 +82,7 @@ You can also use your extracted folder as a backup, which will give you the conf
 to use SAFT'S quicker and more destructive modding tools with ease, knowing everything is backed up
 in your extraction folder. By quick and destructive I am referring the last option all the way on the
 right called "Install Mod(s) without Extraction" > "Replace files without backups"
-<img width="1301" height="768" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/cropped%20tab4.png" />
+<img width="149" height="258" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/cropped%20tab4.png" />
 this is the most destructive tool contained within SAFT and allows you to replace files instantaneously
 within your game directory without extracting anything or backing anything up. It's like going through 
 a drive through and ordering some chicken and meanwhile your pistons get replaced out of nowhere. This
