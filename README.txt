@@ -6,11 +6,23 @@ SAFT — San Andreas File Tool
 
 -Developed by Divinakra, August 2026
 
--SAFT is portable Windows Tool compatible with any build or version of the PC game: GTA San Andreas.
+-SAFT is portable Windows Tool compatible with any build or version of the PC game: GTA San Andreas, 
+only the originals v1-v3. Not the definitive edition.
 
 -SAFT contains no assets, and only allows for users to modify their own GTA SA Game with their own mods.
 
 -SAFT is a file extractor, identifier and replacer; it knows where every modified file goes, based on name.
+
+SAFT has been tested extensively against a real Steam release of GTA San Andreas (v3.0, specifically the 
+"newsteam r2" December 2014 patch — all 8 archives, 61,993 sound effects, and 1,922 streamed tracks verified
+byte-for-byte). SAFT reads the game's own archive and audio config files directly rather than assuming
+fixed file layouts, so it should work with any PC version of the classic GTA San Andreas.
+
+ IMPORTANT: SAFT does NOT work with GTA: The Trilogy - Definitive Edition.
+Even though it has "San Andreas" in the name, the Definitive Edition (released 2021) is a completely
+different, separate game — it runs on entirely different technology than the classic PC version, so
+none of its files match what SAFT knows how to read. If the game you own is called "Grand Theft Auto:
+San Andreas - The Definitive Edition," SAFT will not work for you, no matter what you try.
 
 
 LEGAL DISCLAIMER & NOTICE
