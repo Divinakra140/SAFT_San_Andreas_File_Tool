@@ -2,7 +2,7 @@
 
 *Developed by Divinakra, August 2026*
 
-- SAFT is a portable 32-bit Windows tool compatible with any build or version of the PC game: GTA San
+- **[SAFT](https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/releases/download/v1.0/SAFT.exe)** is a portable 32-bit Windows tool compatible with any build or version of the PC game: GTA San
   Andreas, only the originals v1-v3, not the Definitive Edition.
 - SAFT also runs well in certain PC emulators on Android — to be clear, that means SAFT modifies the 
   original PC game and SAFT can launch and function inside an emulated Windows container on Android. 
