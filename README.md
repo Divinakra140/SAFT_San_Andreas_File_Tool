@@ -1,4 +1,4 @@
-<img width="1157" height="215" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/IMG_8618.PNG" />
+<img width="1449" height="216" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/Title%20wiith%20clouds.png" />
 
 *Developed by Divinakra, August 2026*
 
