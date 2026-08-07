@@ -1,5 +1,4 @@
-# SAFT — San Andreas File Tool
-
+<img width="1157" height="215" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/IMG_8618.PNG" />
 *Developed by Divinakra, August 2026*
 
 - SAFT is a portable 32-bit Windows tool compatible with any build or version of the PC game: GTA San
