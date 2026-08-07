@@ -103,6 +103,46 @@ public partial class MainForm : Form
         return dialog.ShowDialog() == DialogResult.OK ? dialog.SelectedPath : null;
     }
 
+    /// <summary>
+    /// Explains why a game script in the mod folder was left alone. Shown before anything is
+    /// installed, so the user knows the mod isn't fully applied and can decide for themselves
+    /// whether to place it by hand. The two kinds get separate messages because the manual route
+    /// differs completely: main.scm is one loose file, while a streamed script only comes out with
+    /// an extract-and-rebuild.
+    /// </summary>
+    private void WarnAboutRefusedScripts(IReadOnlyList<RefusedScript> refusedScripts)
+    {
+        if (refusedScripts.Count == 0) return;
+
+        if (refusedScripts.Any(s => s.Kind == RefusedScriptKind.MainScript))
+        {
+            MessageBox.Show(
+                "Your mod folder contained a modified script (story line) file. SAFT doesn't replace these, " +
+                "as the result may be irreversible and can corrupt save files.\n\n" +
+                "If you wish to replace it yourself and run the risk, it's just one file, it isn't archived, and " +
+                "it's easily accessible in your game directory — navigate to:\n\n" +
+                "    data > script > main.scm\n\n" +
+                "and replace the game's main.scm with the modified main.scm from your mod folder.\n\n" +
+                "Everything else in your mod will still be installed normally.",
+                "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        var streamed = refusedScripts.Where(s => s.Kind == RefusedScriptKind.StreamedScript).ToList();
+        if (streamed.Count > 0)
+        {
+            MessageBox.Show(
+                $"Your mod folder contained {streamed.Count} modified mission/minigame script file(s) that live inside " +
+                "the game's script.img archive. SAFT doesn't replace these either, for the same reason — the result " +
+                "may be irreversible and can corrupt save files.\n\n" +
+                "If you wish to install them yourself and run the risk, use SAFT's own tabs:\n\n" +
+                "    1. \"Extract Game Files\" to extract your game\n" +
+                "    2. copy your .scm files into the extracted data\\script\\script.img folder\n" +
+                "    3. \"Rebuild from Extracted\" to build the game back up\n\n" +
+                "Everything else in your mod will still be installed normally.",
+                "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
     /// <summary>Sets a progress bar's fractional (archive-count + within-archive-fraction) position using scaled integer steps, since WinForms' ProgressBar.Value is an int, not the double WPF's was.</summary>
     private static void SetScaledProgress(ProgressBar bar, int groupIndex, int groupCount, int filesDone, int filesTotal)
     {
@@ -378,11 +418,18 @@ public partial class MainForm : Form
         {
             var result = await Task.Run(() => ModInstaller.Install(extractionFolder, modFolder, progress));
 
+            WarnAboutRefusedScripts(result.RefusedScripts);
+
             InstallSubProgressText.Text = "Done.";
             var unmatchedCount = result.Unmatched.Count + result.AudioUnmatched.Count;
             MessageBox.Show(
                 $"Done. Routed {result.Routed.Count} file(s), {result.AudioRouted.Count} audio file(s)." +
+                (result.UnarchivedRouted.Count > 0 ? $" {result.UnarchivedRouted.Count} game file(s) outside the archives (map data, etc)." : "") +
                 (unmatchedCount > 0 ? $" {unmatchedCount} file(s) didn't match anything and were left unplaced." : "") +
+                (result.Ambiguous.Count > 0
+                    ? $"\n\n{result.Ambiguous.Count} file(s) exist both inside an archive and loose in the game folder with different contents — " +
+                      "only the archived copy was replaced, since SAFT can't tell which one your mod meant."
+                    : "") +
                 "\n\nGo to the Rebuild tab when you're ready to build the archives.",
                 "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -604,7 +651,9 @@ public partial class MainForm : Form
         {
             var plan = await Task.Run(() => DirectModInstaller.Plan(gameFolder, modFolder));
 
-            if (plan.Matches.Count == 0 && plan.AudioMatches.Count == 0 && plan.StreamMatches.Count == 0)
+            WarnAboutRefusedScripts(plan.RefusedScripts);
+
+            if (plan.Matches.Count == 0 && plan.AudioMatches.Count == 0 && plan.StreamMatches.Count == 0 && plan.UnarchivedMatches.Count == 0)
             {
                 DirectSubProgressText.Text = "Done.";
                 var unmatchedCount = plan.Unmatched.Count + plan.AudioUnmatched.Count + plan.StreamUnmatched.Count;
@@ -641,7 +690,8 @@ public partial class MainForm : Form
             var audioToApply = plan.AudioMatchesThatFit;
             var streamsToApply = plan.StreamMatchesThatFit;
             var groupCountForProgress = plan.Matches.Select(m => m.ArchiveRelativePath).Distinct().Count()
-                + (audioToApply.Count > 0 ? 1 : 0) + (streamsToApply.Count > 0 ? 1 : 0);
+                + (audioToApply.Count > 0 ? 1 : 0) + (streamsToApply.Count > 0 ? 1 : 0)
+                + (plan.UnarchivedMatches.Count > 0 ? 1 : 0);
             var progress = new Progress<DirectInstallProgress>(p =>
             {
                 SetScaledProgress(DirectProgressBar, p.ArchiveIndex, Math.Max(groupCountForProgress, p.ArchiveCount), p.FilesDone, p.FilesTotal);
@@ -666,8 +716,14 @@ public partial class MainForm : Form
             {
                 $"Mod installation complete. {filesReplaced} file(s) replaced across {result.Archives.Count} archive(s)."
             };
+            if (result.Unarchived.Count > 0) summaryLines.Add($"{result.Unarchived.Count} game file(s) replaced outside the archives (map data, etc).");
             if (result.Audio.Count > 0) summaryLines.Add($"{result.Audio.Count} audio file(s) patched.");
             if (result.Streams.Count > 0) summaryLines.Add($"{result.Streams.Count} streamed track(s) patched.");
+            if (result.UnarchivedFailed.Count > 0) summaryLines.Add($"{result.UnarchivedFailed.Count} game file(s) could not be written and were skipped.");
+            if (plan.Ambiguous.Count > 0)
+                summaryLines.Add(
+                    $"{plan.Ambiguous.Count} file(s) exist both inside an archive and loose in your game folder, with different contents — " +
+                    "the archived copy was replaced and the loose copy was left alone, since SAFT can't tell which one your mod meant.");
             if (tooLargeCount > 0) summaryLines.Add($"{tooLargeCount} audio file(s) were too large to replace and were skipped.");
             if (failedCount > 0) summaryLines.Add($"{failedCount} audio file(s) failed to read and were skipped.");
             if (unmatchedFileCount > 0) summaryLines.Add($"{unmatchedFileCount} file(s) didn't match anything in your game and were left unplaced.");
@@ -759,7 +815,9 @@ public partial class MainForm : Form
         {
             var plan = await Task.Run(() => DirectModInstaller.Plan(gameFolder, backupFolder));
 
-            if (plan.Matches.Count == 0 && plan.AudioMatches.Count == 0 && plan.StreamMatches.Count == 0)
+            WarnAboutRefusedScripts(plan.RefusedScripts);
+
+            if (plan.Matches.Count == 0 && plan.AudioMatches.Count == 0 && plan.StreamMatches.Count == 0 && plan.UnarchivedMatches.Count == 0)
             {
                 UninstallSubProgressText.Text = "Done.";
                 MessageBox.Show("No backup files matched anything in your current install. Nothing was changed.", "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -792,7 +850,8 @@ public partial class MainForm : Form
             var audioToApply = plan.AudioMatchesThatFit;
             var streamsToApply = plan.StreamMatchesThatFit;
             var groupCountForProgress = plan.Matches.Select(m => m.ArchiveRelativePath).Distinct().Count()
-                + (audioToApply.Count > 0 ? 1 : 0) + (streamsToApply.Count > 0 ? 1 : 0);
+                + (audioToApply.Count > 0 ? 1 : 0) + (streamsToApply.Count > 0 ? 1 : 0)
+                + (plan.UnarchivedMatches.Count > 0 ? 1 : 0);
             var progress = new Progress<DirectInstallProgress>(p =>
             {
                 SetScaledProgress(UninstallProgressBar, p.ArchiveIndex, Math.Max(groupCountForProgress, p.ArchiveCount), p.FilesDone, p.FilesTotal);
@@ -817,8 +876,14 @@ public partial class MainForm : Form
             {
                 $"Uninstall complete. {filesRestored} file(s) restored across {result.Archives.Count} archive(s)."
             };
+            if (result.Unarchived.Count > 0) summaryLines.Add($"{result.Unarchived.Count} game file(s) restored outside the archives (map data, etc).");
             if (result.Audio.Count > 0) summaryLines.Add($"{result.Audio.Count} audio file(s) restored.");
             if (result.Streams.Count > 0) summaryLines.Add($"{result.Streams.Count} streamed track(s) restored.");
+            if (result.UnarchivedFailed.Count > 0) summaryLines.Add($"{result.UnarchivedFailed.Count} game file(s) could not be written and were skipped.");
+            if (plan.Ambiguous.Count > 0)
+                summaryLines.Add(
+                    $"{plan.Ambiguous.Count} file(s) exist both inside an archive and loose in your game folder, with different contents — " +
+                    "the archived copy was restored and the loose copy was left alone.");
             if (tooLargeCount > 0) summaryLines.Add($"{tooLargeCount} audio file(s) were too large to restore and were skipped.");
             if (failedCount > 0) summaryLines.Add($"{failedCount} audio file(s) failed to read and were skipped.");
             if (unmatchedCount > 0) summaryLines.Add($"{unmatchedCount} file(s) in the backup folder didn't match anything in your game.");

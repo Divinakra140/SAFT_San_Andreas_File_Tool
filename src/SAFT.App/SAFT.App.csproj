@@ -18,6 +18,11 @@
     <ApplicationIcon>..\..\assets\SAFT.ico</ApplicationIcon>
     <AssemblyName>SAFT</AssemblyName>
     <RootNamespace>SAFT.App</RootNamespace>
+    <!-- Shows up in the exe's Properties > Details, so a downloaded copy can be identified on
+         sight. Keep in step with the window title in MainForm.Layout.cs and the GitHub release tag. -->
+    <Version>1.6.0</Version>
+    <Product>SAFT — San Andreas File Tool</Product>
+    <Company>Divinakra</Company>
   </PropertyGroup>
 
   <ItemGroup>
@@ -44,9 +49,12 @@
     <EmbeddedResource Include="..\..\assets\panel\textures.png"><LogicalName>SAFT.Assets.panel.textures.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\animations.png"><LogicalName>SAFT.Assets.panel.animations.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\audio.png"><LogicalName>SAFT.Assets.panel.audio.png</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="..\..\assets\panel\works_with.png"><LogicalName>SAFT.Assets.panel.works_with.png</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="..\..\assets\panel\any_pc_game_version.png"><LogicalName>SAFT.Assets.panel.any_pc_game_version.png</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="..\..\assets\panel\of_gta_san_andreas.png"><LogicalName>SAFT.Assets.panel.of_gta_san_andreas.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\map_data.png"><LogicalName>SAFT.Assets.panel.map_data.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\paths.png"><LogicalName>SAFT.Assets.panel.paths.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\data_tables.png"><LogicalName>SAFT.Assets.panel.data_tables.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\text.png"><LogicalName>SAFT.Assets.panel.text.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\cutscenes.png"><LogicalName>SAFT.Assets.panel.cutscenes.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\particle_effects.png"><LogicalName>SAFT.Assets.panel.particle_effects.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\title_wordmark.png"><LogicalName>SAFT.Assets.panel.title_wordmark.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\title_byline.png"><LogicalName>SAFT.Assets.panel.title_byline.png</LogicalName></EmbeddedResource>
   </ItemGroup>

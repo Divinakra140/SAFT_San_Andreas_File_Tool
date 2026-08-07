@@ -41,7 +41,7 @@ public partial class MainForm
 
     private void BuildUi()
     {
-        Text = "SAFT — San Andreas File Tool";
+        Text = "SAFT 1.6 — San Andreas File Tool";
         Width = 1040;
         Height = 760;
         MinimumSize = new Size(880, 600);
@@ -80,6 +80,10 @@ public partial class MainForm
     {
         var panel = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent };
 
+        // All eleven labels are normalised to the same letter height (the source art was drawn at
+        // differing font sizes, so each was scaled by ink-per-letter rather than by bounding box —
+        // scaling by box height would have made words with tall ascenders render smaller). Widths
+        // and heights below are each image's own trimmed size, so nothing is stretched.
         var y = 20;
         AddCentered(panel, "SAFT.Assets.icon_s.png", 150, 150, ref y, 32);
         AddCentered(panel, "SAFT.Assets.panel.replaces.png", 118, 34, ref y, 20);
@@ -87,10 +91,13 @@ public partial class MainForm
         AddCentered(panel, "SAFT.Assets.panel.collision.png", 96, 24, ref y, 6);
         AddCentered(panel, "SAFT.Assets.panel.textures.png", 102, 24, ref y, 6);
         AddCentered(panel, "SAFT.Assets.panel.animations.png", 112, 24, ref y, 6);
-        AddCentered(panel, "SAFT.Assets.panel.audio.png", 68, 22, ref y, 36);
-        AddCentered(panel, "SAFT.Assets.panel.works_with.png", 91, 65, ref y, 20);
-        AddCentered(panel, "SAFT.Assets.panel.any_pc_game_version.png", 84, 63, ref y, 2);
-        AddCentered(panel, "SAFT.Assets.panel.of_gta_san_andreas.png", 114, 65, ref y, 0);
+        AddCentered(panel, "SAFT.Assets.panel.audio.png", 68, 22, ref y, 6);
+        AddCentered(panel, "SAFT.Assets.panel.map_data.png", 101, 24, ref y, 6);
+        AddCentered(panel, "SAFT.Assets.panel.paths.png", 72, 23, ref y, 6);
+        AddCentered(panel, "SAFT.Assets.panel.data_tables.png", 135, 23, ref y, 6);
+        AddCentered(panel, "SAFT.Assets.panel.text.png", 63, 22, ref y, 6);
+        AddCentered(panel, "SAFT.Assets.panel.cutscenes.png", 130, 24, ref y, 6);
+        AddCentered(panel, "SAFT.Assets.panel.particle_effects.png", 189, 28, ref y, 0);
 
         return panel;
     }

@@ -1,26 +1,32 @@
-SAFT — Winlator / Wine Compatibility Changelog
+SAFT — San Andreas File Tool — Master Changelog
 ===============================================
-By Divinakra in regards to the San Andreas File Tool Build 1.1 Adapted for Android PC Emulators
+By Divinakra, in regards to all San Andreas File Tool builds completed thus far.
+Newest build last. Each release also ships its own standalone changelog on its releases page.
+
+
+===================================================================================================
+CHANGELOG 1.0 — Making SAFT run under Android PC emulation (Winlator)
+===================================================================================================
 
 SAFT now runs successfully under Android PC emulation (Winlator), in addition to native Windows.
-This file changelog.txt lists what actually made that happen.
+This section lists what actually made that happen.
 
 Confirmed working emulators (as of August 2026) : Tested on Retroid Pocket Flip 2 SD865
 -------------------------------------------------
 - Winlator 11.1 Official by bruno dev
-- Winlator Bionic Vanilla 3.1 by StevenMXZ 
+- Winlator Bionic Vanilla 3.1 by StevenMXZ
 
 Confirmed NOT working (the SAFT app won't even open):
-- Winlator Star 
+- Winlator Star
 - GameHub Lite
 
-Successful Container Settings Used: 
+Successful Container Settings Used:
 
 Best Box64 preset: Stability
 
 Startup Selection: Any, even Aggressive works.
 
-Wine Version: Winlator Official 11.1 I used default wine settings. 
+Wine Version: Winlator Official 11.1 I used default wine settings.
 
 For Winlator Bionic I  used Proton-9.0-x86_64-0 this is box, not fex.
 
@@ -28,12 +34,12 @@ DXVK Version: 2.3.1 worked in Bionic and 2.4.1 worked in Official (default for b
 
 GPU driver was default for both, newest mxz turnip 26.2.0 R7-Oneui was also used and worked.
 
-Screen size can be reduced to 940 x 544 to see text more clearly, works at larger resolutions. 
+Screen size can be reduced to 940 x 544 to see text more clearly, works at larger resolutions.
 
-Changelog
+Changes
 ----------------
 
-1. Rewrote the entire GUI from WPF (what we used on 1.0 stable), to WinForms.
+1. Rewrote the entire GUI from WPF (what the original pre-Winlator build used), to WinForms.
    WPF renders through DirectX/DirectWrite, which Wine emulates poorly. WinForms renders through
    GDI/GDI+, a much older and far more thoroughly Wine-tested API. This was the single biggest
    change — without it, the app didn't render at all under Winlator, even though it ran fine on
@@ -95,12 +101,13 @@ Changelog
 
 Result
 ------
-All four tabs are now confirmed fully functional under Winlator: extraction,
-installing into an extracted copy, rebuilding, and direct install/rebuild all work. Mods that are
-too big to patch in place (needing a full archive rebuild) install successfully and work correctly
-in-game, confirmed with three separate real-world car mods (a Nissan Skyline, a Nissan 300ZX, and a
-Toyota Supra swap) and a full modpack (an enhanced weapons pack) replacing models, textures, every
-SFX package, and every streamed radio station — all patched successfully with no failures.
+All five tabs are confirmed fully functional under Winlator: extraction, installing into an
+extracted copy, rebuilding, direct install/rebuild, and uninstalling mods from a vanilla backup.
+Mods that are too big to patch in place (needing a full archive rebuild) install successfully and
+work correctly in-game, confirmed with three separate real-world car mods (a Nissan Skyline, a
+Nissan 300ZX, and a Toyota Supra swap) and a full modpack (an enhanced weapons pack) replacing
+models, textures, every SFX package, and every streamed radio station — all patched successfully
+with no failures.
 
 
 Current time estimates on tasks within an emulated windows container on android: based on testing every function.
@@ -109,5 +116,80 @@ Current time estimates on tasks within an emulated windows container on android:
  Tab 2. Installing mods into extracted directory: 30 seconds or so depending on mod size.
  Tab 3. Rebuilding game from extracted folder: 10-20 minutes or so
  Tab 4. Installing mods into game folder without extraction: 30 seconds or so depending on mod size.
+ Tab 5. Uninstalling mods from a vanilla backup: same as tab 4 — it is the same engine run in
+        reverse, so it takes as long as installing the same set of files did.
+
+
+===================================================================================================
+CHANGELOG 1.6 — Six new file types, and a rule about game scripts
+===================================================================================================
+
+Changes from version 1.0 to 1.6: added 6 new file types that SAFT can replace, totaling in 11.
+
+Changes
+-------
+
+10. Added replacement of game files that live outside the archives (map mods, finally).
+   San Andreas keeps map geometry in the .img archives but map PLACEMENT in loose text files —
+   data/maps/*.ipl and *.ide — plus path nodes, data tables and loose textures. SAFT only ever
+   matched archive entries and audio, so all of that came back as "unmatched" and had to be copied
+   in by hand, which meant a map mod could never be a single SAFT-installable package. Those files
+   are now matched by name and replaced exactly like archive entries, backed up the same way, on
+   every install/uninstall path. Executables, .dll/.asi libraries and whole .img archives are
+   deliberately never eligible — SAFT replaces game assets, not the game itself.
+
+   One real subtlety this turned up: 66 filenames exist BOTH inside an archive and loose in the
+   game folder. 64 of them (the nodes0.dat–nodes63.dat path tables) are byte-for-byte identical in
+   both places, where replacing only one copy risks the game loading the stale other one — so both
+   are updated together. The other two (arrow.dff, hoop.dff) are genuinely different files that
+   merely share a name, where no tool can know which one a mod meant. Rather than guess, SAFT
+   compares the game's own two copies: identical means update both, different means replace the
+   archived copy and report the other instead of silently overwriting it.
+
+11. SAFT will no longer replace game scripts (.scm) at all, and says why.
+   This one is a rule, not a limitation: SAFT only installs what it can genuinely uninstall.
+   Every other file SAFT touches is a leaf asset — restore the original and the change is fully
+   undone. Scripts aren't. San Andreas save files are written against the script's global variable
+   layout (defined by data/script/main.scm), and they also store a table of streamed-script records
+   that reference the scripts inside script.img BY INDEX — confirmed by reading a real save
+   directly: 25 records, 20 bytes each, named DANCER, PCHAIR, OTBWTCH, PEDROUL and so on, matching
+   script.img's own entries one for one. Replace either kind and an existing save can hold live
+   references into bytecode that no longer matches it. Saves live in the user's Documents folder,
+   outside the game directory, so no backup SAFT makes can undo that damage.
+
+   So both are refused now — the loose main.scm AND the streamed scripts inside script.img, even
+   though the latter are ordinary archive entries SAFT is perfectly capable of patching. When a mod
+   folder contains either, SAFT says so in plain language rather than silently ignoring the file,
+   and the two get different instructions because installing them by hand is a different job:
+   main.scm is one loose file at data > script > main.scm that can simply be dragged over, whereas
+   a streamed script only comes out of script.img by extracting the game, dropping the .scm into the
+   extracted script.img folder, and rebuilding — all of which SAFT's own first and third tabs do.
+   Everything else in the mod still installs normally either way.
+
+Result
+------
+SAFT now replaces 11 categories of game file, up from 5:
+
+  1. Models          .dff
+  2. Collision       .col
+  3. Textures        .txd
+  4. Animations      .ifp
+  5. Audio           .wav for SFX, .ogg for music
+  6. Map Data        .ipl placement, .ide object definitions
+  7. Paths           nodes .dat, .rrr car recordings
+  8. Data Tables     .dat, .cfg, .zon, .ped, .grp
+  9. Text            .gxt
+ 10. Cutscenes       .cut, .mpg
+ 11. Particle Effects .fxp
+
+That is essentially every asset in the game. For scale, a stock v3 install holds 15,334 models,
+3,983 textures, 435 animations, 426 car recordings, 251 collision files, 190 map placement files
+and 212 data tables inside the archives, plus another 398 files sitting loose in the game folder.
+SAFT can replace all of them.
+
+Deliberately never replaced: .exe (the game itself), .dll and .asi (libraries and plugins —
+modloader/CLEO territory), .img (whole archives, which SAFT works inside of rather than swapping),
+and .scm (game scripts, per item 11 above, SAFT will never run the chance of corrupting any saves.)
+
 
 - Divinakra

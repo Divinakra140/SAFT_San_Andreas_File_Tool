@@ -51,6 +51,41 @@ public sealed record DirectStreamMatch(
     public bool Fits => NewPayloadLength <= OriginalPayloadLength;
 }
 
+/// <summary>
+/// One mod file matched against a game file that lives loose in the game folder rather than inside
+/// an archive — map placement data (.ipl/.ide), path nodes, data tables, loose textures. Plain file
+/// replacement, no directory table or sector maths involved.
+/// </summary>
+public sealed record DirectUnarchivedMatch(
+    string FileName,
+    string ModFilePath,
+    string RelativePath,
+    string AbsolutePath);
+
+/// <summary>
+/// A mod file whose name matches both an archive entry and an unarchived game file, where those two
+/// game copies hold <em>different</em> content — so they're two distinct live assets that merely
+/// share a name and SAFT can't know which one the mod meant. Reported rather than guessed at; the
+/// archived copy is still replaced, the unarchived one is left alone.
+/// </summary>
+public sealed record DirectAmbiguousMatch(string FileName, string ArchiveRelativePath, string UnarchivedRelativePath);
+
+/// <summary>
+/// Which kind of game script SAFT declined to install. The refusal reason is identical for both
+/// (see <see cref="FileFilters.IsGameScriptFile"/>), but what the user would have to do to install
+/// it by hand is completely different, so they're reported apart.
+/// </summary>
+public enum RefusedScriptKind
+{
+    /// <summary>The main script, loose at data/script/main.scm — a single file that can simply be dragged over.</summary>
+    MainScript,
+
+    /// <summary>A streamed script living inside script.img — only reachable by extracting the game and rebuilding it.</summary>
+    StreamedScript,
+}
+
+public sealed record RefusedScript(string FileName, RefusedScriptKind Kind);
+
 public sealed record DirectInstallPlan(
     string GameRoot,
     IReadOnlyList<DirectInstallMatch> Matches,
@@ -59,7 +94,10 @@ public sealed record DirectInstallPlan(
     IReadOnlyList<DirectAudioMatch> AudioMatches,
     IReadOnlyList<string> AudioUnmatched,
     IReadOnlyList<DirectStreamMatch> StreamMatches,
-    IReadOnlyList<string> StreamUnmatched)
+    IReadOnlyList<string> StreamUnmatched,
+    IReadOnlyList<DirectUnarchivedMatch> UnarchivedMatches,
+    IReadOnlyList<DirectAmbiguousMatch> Ambiguous,
+    IReadOnlyList<RefusedScript> RefusedScripts)
 {
     /// <summary>
     /// True if any matched file is too big to fit in its original entry's allocated space, meaning
@@ -95,9 +133,14 @@ public sealed record DirectAudioFailure(string MatchKey, string Reason);
 
 public sealed record DirectStreamFailure(string MatchKey, string Reason);
 
+public sealed record DirectUnarchivedSummary(string RelativePath, bool BackedUp);
+
+public sealed record DirectUnarchivedFailure(string RelativePath, string Reason);
+
 public sealed record DirectInstallResult(
     IReadOnlyList<DirectInstallSummary> Archives, IReadOnlyList<DirectAudioSummary> Audio, IReadOnlyList<DirectStreamSummary> Streams,
-    IReadOnlyList<DirectAudioFailure> AudioFailed, IReadOnlyList<DirectStreamFailure> StreamFailed);
+    IReadOnlyList<DirectAudioFailure> AudioFailed, IReadOnlyList<DirectStreamFailure> StreamFailed,
+    IReadOnlyList<DirectUnarchivedSummary> Unarchived, IReadOnlyList<DirectUnarchivedFailure> UnarchivedFailed);
 
 /// <summary>
 /// Installs mod-replacement files straight into a game's live archives, SFX banks, and streamed
@@ -137,6 +180,7 @@ public static class DirectModInstaller
 
         var audioIndex = BuildAudioIndex(gameRoot);
         var streamIndex = BuildStreamIndex(gameRoot);
+        var unarchivedIndex = UnarchivedIndex.Build(gameRoot);
 
         var matches = new List<DirectInstallMatch>();
         var unmatched = new List<string>();
@@ -144,11 +188,26 @@ public static class DirectModInstaller
         var audioUnmatched = new List<string>();
         var streamMatches = new List<DirectStreamMatch>();
         var streamUnmatched = new List<string>();
+        var unarchivedMatches = new List<DirectUnarchivedMatch>();
+        var ambiguous = new List<DirectAmbiguousMatch>();
+        var refusedScripts = new List<RefusedScript>();
 
         foreach (var sourcePath in Directory.EnumerateFiles(modSourceFolder, "*", SearchOption.AllDirectories))
         {
             var fileName = Path.GetFileName(sourcePath);
             if (FileFilters.IsIgnoredFile(fileName)) continue;
+
+            // Game scripts are refused outright, archived or not — see FileFilters.IsGameScriptFile
+            // for why. Reported separately from "unmatched" so the app can explain the refusal
+            // rather than leaving the user thinking SAFT simply didn't recognise the file. Which
+            // kind it is decides the manual instructions: a script the game keeps inside script.img
+            // can only be swapped by extracting and rebuilding, whereas main.scm is one loose file.
+            if (FileFilters.IsGameScriptFile(fileName))
+            {
+                var kind = index.ContainsKey(fileName) ? RefusedScriptKind.StreamedScript : RefusedScriptKind.MainScript;
+                refusedScripts.Add(new RefusedScript(fileName, kind));
+                continue;
+            }
 
             if (fileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
             {
@@ -194,23 +253,76 @@ public static class DirectModInstaller
                 continue;
             }
 
-            if (!index.TryGetValue(fileName, out var targets))
+            var inArchives = index.TryGetValue(fileName, out var targets);
+            var inGameFolder = unarchivedIndex.TryGetValue(fileName, out var unarchivedTargets);
+
+            if (!inArchives && !inGameFolder)
             {
                 unmatched.Add(fileName);
                 continue;
             }
 
-            var newSectors = (new FileInfo(sourcePath).Length + ImgEntry.SectorSize - 1) / ImgEntry.SectorSize;
-
-            foreach (var (found, entry) in targets)
+            if (inArchives)
             {
-                var requiresRebuild = newSectors > entry.SizeSectors;
-                matches.Add(new DirectInstallMatch(fileName, sourcePath, found.RelativePath, found.AbsolutePath, entry.Name, requiresRebuild));
+                var newSectors = (new FileInfo(sourcePath).Length + ImgEntry.SectorSize - 1) / ImgEntry.SectorSize;
+                foreach (var (found, entry) in targets!)
+                {
+                    var requiresRebuild = newSectors > entry.SizeSectors;
+                    matches.Add(new DirectInstallMatch(fileName, sourcePath, found.RelativePath, found.AbsolutePath, entry.Name, requiresRebuild));
+                }
+            }
+
+            if (!inGameFolder) continue;
+
+            foreach (var unarchived in unarchivedTargets!)
+            {
+                // A name found in both worlds is the one case where SAFT can't just act: it's
+                // either the same asset duplicated (San Andreas ships the 64 path-node tables
+                // byte-identically in data/Paths/ AND inside gta3.img — there, updating only one
+                // copy risks the game loading the stale other one), or two unrelated assets that
+                // happen to share a name. Comparing the game's own two copies is what tells those
+                // apart, so the decision comes from the data rather than a guess about intent.
+                if (inArchives && !ArchivedAndUnarchivedAgree(targets!, unarchived))
+                {
+                    ambiguous.Add(new DirectAmbiguousMatch(fileName, targets![0].Archive.RelativePath, unarchived.RelativePath));
+                    continue;
+                }
+
+                unarchivedMatches.Add(new DirectUnarchivedMatch(
+                    fileName, sourcePath, unarchived.RelativePath, unarchived.AbsolutePath));
             }
         }
 
         return new DirectInstallPlan(
-            gameRoot, matches, unmatched, foundArchives.Count, audioMatches, audioUnmatched, streamMatches, streamUnmatched);
+            gameRoot, matches, unmatched, foundArchives.Count, audioMatches, audioUnmatched, streamMatches, streamUnmatched,
+            unarchivedMatches, ambiguous, refusedScripts);
+    }
+
+    /// <summary>
+    /// Whether the game's own archived and unarchived copies of a same-named file hold identical
+    /// content. Any archive copy differing is enough to call it a disagreement — better to ask than
+    /// to replace an asset the mod may not have meant.
+    /// </summary>
+    private static bool ArchivedAndUnarchivedAgree(
+        List<(FoundArchive Archive, ImgEntry Entry)> targets, UnarchivedFile unarchived)
+    {
+        foreach (var (found, entry) in targets)
+        {
+            try
+            {
+                using var archive = ImgArchive.Open(found.AbsolutePath);
+                using var entryStream = archive.OpenEntry(entry);
+                if (!UnarchivedIndex.ContentMatches(entryStream, entry.SizeSectors * (long)ImgEntry.SectorSize, unarchived.AbsolutePath))
+                    return false;
+            }
+            catch
+            {
+                // Unreadable for any reason means "can't establish they're the same", which lands
+                // on the ask-don't-guess side.
+                return false;
+            }
+        }
+        return true;
     }
 
     private sealed record AudioSlot(
@@ -270,7 +382,8 @@ public static class DirectModInstaller
         var byArchive = plan.Matches.GroupBy(m => m.ArchiveRelativePath).ToList();
         var audioToApply = plan.AudioMatchesThatFit;
         var streamsToApply = plan.StreamMatchesThatFit;
-        var totalGroups = byArchive.Count + (audioToApply.Count > 0 ? 1 : 0) + (streamsToApply.Count > 0 ? 1 : 0);
+        var totalGroups = byArchive.Count + (audioToApply.Count > 0 ? 1 : 0) + (streamsToApply.Count > 0 ? 1 : 0)
+            + (plan.UnarchivedMatches.Count > 0 ? 1 : 0);
 
         for (var i = 0; i < byArchive.Count; i++)
         {
@@ -367,7 +480,46 @@ public static class DirectModInstaller
             }
         }
 
-        return new DirectInstallResult(summaries, audioSummaries, streamSummaries, audioFailed, streamFailed);
+        var unarchivedSummaries = new List<DirectUnarchivedSummary>();
+        var unarchivedFailed = new List<DirectUnarchivedFailure>();
+        var unarchivedGroupIndex = totalGroups;
+        for (var i = 0; i < plan.UnarchivedMatches.Count; i++)
+        {
+            var match = plan.UnarchivedMatches[i];
+
+            progress?.Report(new DirectInstallProgress(
+                match.RelativePath, unarchivedGroupIndex, totalGroups, "Replacing game files", i + 1, plan.UnarchivedMatches.Count));
+
+            try
+            {
+                var backedUp = false;
+                if (backupOutputFolder is not null)
+                {
+                    var backupPath = Path.Combine(backupOutputFolder, match.RelativePath);
+                    Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+                    File.Copy(match.AbsolutePath, backupPath, overwrite: true);
+                    backedUp = true;
+                }
+
+                // Staged next to the target and swapped in via the same crash-safe rename path the
+                // archives use, rather than writing over the original directly — an interrupted
+                // copy must never be able to leave a half-written game file behind.
+                var stagedPath = match.AbsolutePath + ".saft-tmp";
+                File.Copy(match.ModFilePath, stagedPath, overwrite: true);
+                FileReplace.MoveOver(stagedPath, match.AbsolutePath);
+
+                unarchivedSummaries.Add(new DirectUnarchivedSummary(match.RelativePath, backedUp));
+            }
+            catch (Exception ex)
+            {
+                // Same resilience rule as audio: one unwritable file (permissions, a lock, a full
+                // disk) doesn't abandon everything else in the batch.
+                unarchivedFailed.Add(new DirectUnarchivedFailure(match.RelativePath, ex.Message));
+            }
+        }
+
+        return new DirectInstallResult(
+            summaries, audioSummaries, streamSummaries, audioFailed, streamFailed, unarchivedSummaries, unarchivedFailed);
     }
 
     private static void BackupAudioOriginal(DirectAudioMatch match, string backupOutputFolder)

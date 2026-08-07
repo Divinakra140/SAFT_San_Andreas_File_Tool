@@ -61,14 +61,20 @@ modified and different than stock, it runs like stock. Think of a Mod Loader lik
 of a SAFT like installing new engine parts on a naturally aspirated car. SAFT modifies the game from the 
 inside-out, whereas mod loaders modify the game from the outside-in.
 
-SAFT is like the mechanic who understands your car very well, and can quickly and cleanly install any 
-new engine parts you want to bring to him as long as they fall into the 5 categories: 
+SAFT is like the mechanic who understands your car very well, and can quickly and cleanly install any
+new engine parts you want to bring to him as long as they fall into the 11 categories:
 
-1.Models
-2.Collision
-3.Textures
-4.Animations
-5.Audio
+1.Models (.dff)
+2.Collision (.col)
+3.Textures (.txd)
+4.Animations (.ifp)
+5.Audio (.wav for SFX, .ogg for music)
+6.Map Data (.ipl, .ide)
+7.Paths (nodes .dat, .rrr car recordings)
+8.Data Tables (.dat, .cfg, .zon, .ped, .grp)
+9.Text (.gxt)
+10.Cutscenes (.cut, .mpg)
+11.Particle Effects (.fxp)
 
 And as long as they are named correctly.
 
@@ -175,9 +181,53 @@ SAFT only accepts the native GTA SA file types, no .DAE for models, no mp3 for a
 
 1. For Models: .dff (use DragonDFF plugin for blender)
 2. For Collision: .col
-3. For Textures: .txd 
+3. For Textures: .txd
 4. For Animations: .ifp
 5. For Audio: mono 16-bit .wav for SFX and .ogg for Music (both are built in export options from audacity)
+6. For Map Data: .ipl (where every object sits in the world) and .ide (what each object IS - its
+model, its texture, its draw distance). This is what map mods are made of.
+7. For Paths: nodes*.dat - the invisible road and pavement network that vehicles and
+pedestrians navigate on - plus .rrr car recordings. A car recording is a pre-recorded vehicle route:
+a sequence of position, rotation and speed samples that gets played back whenever a scripted vehicle
+has to drive an exact path (mission vehicles, the train on its track, planes on set flight paths,
+cutscene traffic). Replacing one changes the route and the speed that vehicle takes.
+8. For Data Tables: handling.cfg (vehicle handling), weapon.dat, carcols.dat, carmods.dat, .zon map
+zones, .ped and .grp pedestrian behaviour, and the rest of the tables in the data folder.
+9. For Text: .gxt - every subtitle, mission caption and menu string in the game, which means full
+translations can be installed with SAFT.
+10. For Cutscenes: .cut cutscene data, and the .mpg intro movies.
+11. For Particle Effects: .fxp - explosions, fire, smoke, water spray, muzzle flashes and the rest of
+the game's particle system.
+
+That covers essentially every asset in the game. To put numbers on it, a stock v3 install holds
+15,334 models, 3,983 textures, 435 animations, 426 car recordings, 251 collision files, 190 map
+placement files and 212 data tables inside the archives, plus another 398 files sitting loose in
+the game folder. SAFT can replace all of them.
+
+
+What SAFT will NOT replace:
+---------------------------
+
+.exe        - The game executable itself. SAFT replaces game assets, not the game.
+
+.dll / .asi - Libraries and plugins. That's modloader/cleo territory, which SAFT exists to avoid.
+
+.img        - Whole archives. SAFT works INSIDE these, so swapping one wholesale would bypass
+              everything the tool does.
+
+.scm        - Game scripts: data/script/main.scm and the scripts inside script.img.
+
+The script rule is worth explaining, because it is a rule and not a limitation. SAFT only installs
+what it can uninstall. Every other file it touches is self contained: put the original back and the
+change is completely undone. Scripts are not. San Andreas save files are written against the
+script's global variable layout, and they also store a table of references pointing at the scripts
+inside script.img BY POSITION. Replace a script and an existing save can end up pointing into code
+that no longer matches it. Saves live in Documents\GTA San Andreas User Files, outside your game
+folder, so no backup SAFT makes can undo that. A broken save stays broken.
+
+So SAFT refuses, and it tells you when your mod folder contains one. If you still want it, main.scm
+is a single unarchived file at data > script > main.scm, so you can drag your modded copy over it
+yourself. Everything else in that mod still installs normally.
 
 				~ Audio ~
 

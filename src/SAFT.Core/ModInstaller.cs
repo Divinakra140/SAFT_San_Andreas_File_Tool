@@ -6,9 +6,15 @@ public sealed record ModInstallRouted(string FileName, IReadOnlyList<string> Arc
 /// <summary>A mod-source .wav/.ogg matched to an unpacked sound/track by its "Package/Bank_NNN/sound_NNN.wav" or "Station/Track_NNN.ogg" path and copied into place.</summary>
 public sealed record ModInstallAudioRouted(string MatchKey);
 
+/// <summary>A mod-source file matched to a game file the extractor mirrored as-is (map data, path nodes, data tables) rather than to an archive entry.</summary>
+public sealed record ModInstallUnarchivedRouted(string FileName, string RelativePath);
+
 public sealed record ModInstallResult(
     IReadOnlyList<ModInstallRouted> Routed, IReadOnlyList<string> Unmatched,
-    IReadOnlyList<ModInstallAudioRouted> AudioRouted, IReadOnlyList<string> AudioUnmatched);
+    IReadOnlyList<ModInstallAudioRouted> AudioRouted, IReadOnlyList<string> AudioUnmatched,
+    IReadOnlyList<ModInstallUnarchivedRouted> UnarchivedRouted,
+    IReadOnlyList<DirectAmbiguousMatch> Ambiguous,
+    IReadOnlyList<RefusedScript> RefusedScripts);
 
 public sealed record ModInstallProgress(int FilesDone, int FilesTotal, string CurrentFile);
 
@@ -59,10 +65,16 @@ public static class ModInstaller
         var unpackedAudioPackages = new HashSet<string>(manifest.UnpackedAudioPackages, StringComparer.OrdinalIgnoreCase);
         var unpackedStreamStations = new HashSet<string>(manifest.UnpackedStreamStations, StringComparer.OrdinalIgnoreCase);
 
+        var unarchivedIndex = UnarchivedIndex.BuildForExtraction(
+            extractionRoot, manifest.Archives.Select(a => a.RelativePath));
+
         var routed = new List<ModInstallRouted>();
         var unmatched = new List<string>();
         var audioRouted = new List<ModInstallAudioRouted>();
         var audioUnmatched = new List<string>();
+        var unarchivedRouted = new List<ModInstallUnarchivedRouted>();
+        var ambiguous = new List<DirectAmbiguousMatch>();
+        var refusedScripts = new List<RefusedScript>();
 
         var sourceFiles = Directory.EnumerateFiles(modSourceFolder, "*", SearchOption.AllDirectories).ToList();
         for (var i = 0; i < sourceFiles.Count; i++)
@@ -72,6 +84,18 @@ public static class ModInstaller
             progress?.Report(new ModInstallProgress(i + 1, sourceFiles.Count, fileName));
 
             if (FileFilters.IsIgnoredFile(fileName)) continue;
+
+            // Never routed, by any path — see FileFilters.IsGameScriptFile. The manifest knows which
+            // scripts came out of script.img, which is what separates "extract and rebuild to do it
+            // by hand" from "main.scm is one loose file you can just drag over".
+            if (FileFilters.IsGameScriptFile(fileName))
+            {
+                var kind = archivesByFileName.ContainsKey(fileName)
+                    ? RefusedScriptKind.StreamedScript
+                    : RefusedScriptKind.MainScript;
+                refusedScripts.Add(new RefusedScript(fileName, kind));
+                continue;
+            }
 
             if (fileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
             {
@@ -93,24 +117,71 @@ public static class ModInstaller
                 continue;
             }
 
-            if (!archivesByFileName.TryGetValue(fileName, out var archiveRelativePaths))
+            var inArchives = archivesByFileName.TryGetValue(fileName, out var archiveRelativePaths);
+            var inGameFiles = unarchivedIndex.TryGetValue(fileName, out var unarchivedTargets);
+
+            if (!inArchives && !inGameFiles)
             {
                 unmatched.Add(fileName);
                 continue;
             }
 
             var bucket = ImgEntry.GetBucketFolderName(fileName);
-            foreach (var archiveRelativePath in archiveRelativePaths)
+
+            // Decided BEFORE anything is overwritten — comparing after would be comparing the mod's
+            // own content against the game's, which always "differs" and would flag everything.
+            // Same ask-don't-guess rule as the direct installer: a name living both inside an
+            // archive and loose in the game folder is either one asset duplicated (identical
+            // content, so both copies must move together) or two unrelated assets sharing a name,
+            // and only the game's own bytes can tell those apart.
+            var agreeingUnarchived = new List<UnarchivedFile>();
+            if (inGameFiles)
             {
-                var destDir = Path.Combine(extractionRoot, archiveRelativePath, bucket);
-                Directory.CreateDirectory(destDir);
-                File.Copy(sourcePath, Path.Combine(destDir, fileName), overwrite: true);
+                foreach (var unarchived in unarchivedTargets!)
+                {
+                    if (inArchives && !ExtractedCopiesAgree(extractionRoot, archiveRelativePaths!, bucket, fileName, unarchived))
+                        ambiguous.Add(new DirectAmbiguousMatch(fileName, archiveRelativePaths![0], unarchived.RelativePath));
+                    else
+                        agreeingUnarchived.Add(unarchived);
+                }
             }
 
-            routed.Add(new ModInstallRouted(fileName, archiveRelativePaths));
+            if (inArchives)
+            {
+                foreach (var archiveRelativePath in archiveRelativePaths!)
+                {
+                    var destDir = Path.Combine(extractionRoot, archiveRelativePath, bucket);
+                    Directory.CreateDirectory(destDir);
+                    File.Copy(sourcePath, Path.Combine(destDir, fileName), overwrite: true);
+                }
+
+                routed.Add(new ModInstallRouted(fileName, archiveRelativePaths!));
+            }
+
+            foreach (var unarchived in agreeingUnarchived)
+            {
+                File.Copy(sourcePath, unarchived.AbsolutePath, overwrite: true);
+                unarchivedRouted.Add(new ModInstallUnarchivedRouted(fileName, unarchived.RelativePath));
+            }
         }
 
-        return new ModInstallResult(routed, unmatched, audioRouted, audioUnmatched);
+        return new ModInstallResult(routed, unmatched, audioRouted, audioUnmatched, unarchivedRouted, ambiguous, refusedScripts);
+    }
+
+    /// <summary>
+    /// Whether the extracted install's archive-unpacked copy and mirrored loose copy of a
+    /// same-named file hold identical content. Compared before either is overwritten, so the
+    /// decision reflects the original game's own data.
+    /// </summary>
+    private static bool ExtractedCopiesAgree(
+        string extractionRoot, List<string> archiveRelativePaths, string bucket, string fileName, UnarchivedFile unarchived)
+    {
+        foreach (var archiveRelativePath in archiveRelativePaths)
+        {
+            var archivedCopy = Path.Combine(extractionRoot, archiveRelativePath, bucket, fileName);
+            if (!UnarchivedIndex.ContentMatches(archivedCopy, unarchived.AbsolutePath)) return false;
+        }
+        return true;
     }
 
     /// <summary>

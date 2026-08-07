@@ -432,4 +432,244 @@ public class DirectModInstallerTests
         var failure = Assert.Single(result.StreamFailed);
         Assert.Equal("AA/Track_001.ogg", failure.MatchKey);
     }
+
+    [Fact]
+    public void Plan_and_Apply_replace_game_files_that_live_outside_the_archives()
+    {
+        var gameRoot = BuildGameRoot();
+        var mapsDir = Path.Combine(gameRoot, "data", "maps", "LA");
+        Directory.CreateDirectory(mapsDir);
+        File.WriteAllText(Path.Combine(mapsDir, "LAn.ipl"), "original placement data");
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "LAn.ipl"), "modded placement data");
+
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+
+        // Map placement data isn't in any archive, but it's still a real game file the mod means to
+        // replace — it must match, not land in "unmatched" for the user to place by hand.
+        Assert.Empty(plan.Unmatched);
+        var match = Assert.Single(plan.UnarchivedMatches);
+        Assert.Equal("LAn.ipl", match.FileName);
+
+        var result = DirectModInstaller.Apply(plan, backupOutputFolder: null);
+
+        Assert.Single(result.Unarchived);
+        Assert.Equal("modded placement data", File.ReadAllText(Path.Combine(mapsDir, "LAn.ipl")));
+    }
+
+    [Fact]
+    public void Apply_backs_up_an_unarchived_game_file_at_its_original_relative_path()
+    {
+        var gameRoot = BuildGameRoot();
+        var mapsDir = Path.Combine(gameRoot, "data", "maps", "LA");
+        Directory.CreateDirectory(mapsDir);
+        File.WriteAllText(Path.Combine(mapsDir, "LAn.ipl"), "original placement data");
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "LAn.ipl"), "modded placement data");
+        var backupFolder = TestScratch.NewDir();
+
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+        var result = DirectModInstaller.Apply(plan, backupFolder);
+
+        Assert.True(Assert.Single(result.Unarchived).BackedUp);
+        // Mirroring the game's own folder layout is what makes the backup usable as an uninstall
+        // source later — the Uninstall tab feeds it straight back through this same matcher.
+        var backedUp = Path.Combine(backupFolder, "data", "maps", "LA", "LAn.ipl");
+        Assert.True(File.Exists(backedUp));
+        Assert.Equal("original placement data", File.ReadAllText(backedUp));
+    }
+
+    [Fact]
+    public void Plan_replaces_both_copies_when_an_archived_and_unarchived_file_hold_identical_content()
+    {
+        // San Andreas really does this: nodes0.dat … nodes63.dat are shipped byte-for-byte
+        // identically both loose in data/Paths/ and inside gta3.img. Updating only one copy risks
+        // the game loading the stale other one, so both have to move together.
+        var gameRoot = TestScratch.NewDir();
+        Directory.CreateDirectory(Path.Combine(gameRoot, "models"));
+        File.WriteAllText(Path.Combine(gameRoot, "gta_sa.exe"), "stub");
+        ImgArchive.Write(Path.Combine(gameRoot, "models", "gta3.img"), new[] { File_("nodes0.dat", "shared node data") });
+
+        var pathsDir = Path.Combine(gameRoot, "data", "Paths");
+        Directory.CreateDirectory(pathsDir);
+        File.WriteAllText(Path.Combine(pathsDir, "nodes0.dat"), "shared node data");
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "nodes0.dat"), "modded node data");
+
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+
+        Assert.Empty(plan.Ambiguous);
+        Assert.Single(plan.Matches);            // the archived copy
+        Assert.Single(plan.UnarchivedMatches);  // and the loose one alongside it
+
+        DirectModInstaller.Apply(plan, backupOutputFolder: null);
+        Assert.Equal("modded node data", File.ReadAllText(Path.Combine(pathsDir, "nodes0.dat")));
+    }
+
+    [Fact]
+    public void Plan_refuses_to_guess_when_an_archived_and_unarchived_file_of_the_same_name_differ()
+    {
+        // The arrow.dff / hoop.dff case: same name, genuinely different content, so SAFT can't know
+        // which asset the mod meant. It replaces the archived copy (the one reachable by object ID)
+        // and reports the loose one instead of silently overwriting it.
+        var gameRoot = TestScratch.NewDir();
+        Directory.CreateDirectory(Path.Combine(gameRoot, "models"));
+        File.WriteAllText(Path.Combine(gameRoot, "gta_sa.exe"), "stub");
+        ImgArchive.Write(Path.Combine(gameRoot, "models", "gta3.img"), new[] { File_("arrow.dff", "the streamed arrow model") });
+
+        var genericDir = Path.Combine(gameRoot, "models", "generic");
+        Directory.CreateDirectory(genericDir);
+        File.WriteAllText(Path.Combine(genericDir, "arrow.dff"), "a completely different arrow model");
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "arrow.dff"), "modded arrow");
+
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+
+        Assert.Single(plan.Matches);           // archived copy still replaced
+        Assert.Empty(plan.UnarchivedMatches);  // loose copy deliberately left alone
+        var ambiguous = Assert.Single(plan.Ambiguous);
+        Assert.Equal("arrow.dff", ambiguous.FileName);
+
+        DirectModInstaller.Apply(plan, backupOutputFolder: null);
+        Assert.Equal("a completely different arrow model", File.ReadAllText(Path.Combine(genericDir, "arrow.dff")));
+    }
+
+    [Fact]
+    public void ModInstaller_routes_unarchived_game_files_into_an_extracted_install_and_they_survive_rebuild()
+    {
+        var gameRoot = BuildGameRoot();
+        var mapsDir = Path.Combine(gameRoot, "data", "maps", "LA");
+        Directory.CreateDirectory(mapsDir);
+        File.WriteAllText(Path.Combine(mapsDir, "LAn.ipl"), "original placement data");
+
+        var extractDest = TestScratch.NewDir();
+        Extractor.Extract(gameRoot, extractDest);
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "LAn.ipl"), "modded placement data");
+
+        var result = ModInstaller.Install(extractDest, modSource);
+
+        // A mod pack must behave the same whichever route the user takes — installing into an
+        // extracted copy has to route map data just like the direct installer does.
+        Assert.Empty(result.Unmatched);
+        Assert.Single(result.UnarchivedRouted);
+        Assert.Equal("modded placement data", File.ReadAllText(Path.Combine(extractDest, "data", "maps", "LA", "LAn.ipl")));
+
+        // …and the rebuild has to carry it through to the playable output.
+        var rebuildOutput = TestScratch.NewDir();
+        Rebuilder.Rebuild(extractDest, rebuildOutput);
+        Assert.Equal("modded placement data", File.ReadAllText(Path.Combine(rebuildOutput, "data", "maps", "LA", "LAn.ipl")));
+    }
+
+    [Fact]
+    public void ModInstaller_compares_the_games_own_copies_not_the_mods_when_deciding_ambiguity()
+    {
+        // Regression guard: the identical/different decision must be made against the ORIGINAL
+        // extracted copies. Comparing after the archive copy has already been overwritten would be
+        // comparing the mod against the game, which always differs — silently turning every
+        // dual-location file into a false "ambiguous" and quietly skipping it.
+        var gameRoot = TestScratch.NewDir();
+        Directory.CreateDirectory(Path.Combine(gameRoot, "models"));
+        File.WriteAllText(Path.Combine(gameRoot, "gta_sa.exe"), "stub");
+        ImgArchive.Write(Path.Combine(gameRoot, "models", "gta3.img"), new[] { File_("nodes0.dat", "shared node data") });
+
+        var pathsDir = Path.Combine(gameRoot, "data", "Paths");
+        Directory.CreateDirectory(pathsDir);
+        File.WriteAllText(Path.Combine(pathsDir, "nodes0.dat"), "shared node data");
+
+        var extractDest = TestScratch.NewDir();
+        Extractor.Extract(gameRoot, extractDest);
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "nodes0.dat"), "modded node data");
+
+        var result = ModInstaller.Install(extractDest, modSource);
+
+        Assert.Empty(result.Ambiguous);
+        Assert.Single(result.UnarchivedRouted);
+        Assert.Equal("modded node data", File.ReadAllText(Path.Combine(extractDest, "data", "Paths", "nodes0.dat")));
+        Assert.Equal("modded node data", File.ReadAllText(Path.Combine(extractDest, "models", "gta3.img", "dat", "nodes0.dat")));
+    }
+
+    [Fact]
+    public void Plan_never_matches_executables_libraries_or_whole_archives()
+    {
+        var gameRoot = BuildGameRoot();
+        File.WriteAllText(Path.Combine(gameRoot, "vorbisFile.dll"), "original library");
+
+        var scriptDir = Path.Combine(gameRoot, "data", "script");
+        Directory.CreateDirectory(scriptDir);
+        File.WriteAllText(Path.Combine(scriptDir, "main.scm"), "original game script");
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "gta_sa.exe"), "a replacement executable");
+        File.WriteAllText(Path.Combine(modSource, "vorbisFile.dll"), "a replacement library");
+        File.WriteAllText(Path.Combine(modSource, "gta3.img"), "a whole replacement archive");
+        File.WriteAllText(Path.Combine(modSource, "main.scm"), "a replacement game script");
+
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+
+        // Binaries and whole archives are never eligible: SAFT replaces game assets, not the game
+        // itself, and a wholesale .img swap would bypass the entire patch/rebuild path.
+        //
+        // main.scm is excluded on a stricter principle — SAFT only installs what it can genuinely
+        // uninstall. Save files embed the script's global layout and live outside the game folder,
+        // so a save written against a modded script stays broken even after the file is restored.
+        Assert.Empty(plan.UnarchivedMatches);
+        Assert.Equal(3, plan.Unmatched.Count); // exe, dll, img
+        var refused = Assert.Single(plan.RefusedScripts); // reported separately, so the app can explain why
+        Assert.Equal("main.scm", refused.FileName);
+        Assert.Equal(RefusedScriptKind.MainScript, refused.Kind);
+        Assert.Equal("original library", File.ReadAllText(Path.Combine(gameRoot, "vorbisFile.dll")));
+        Assert.Equal("stub", File.ReadAllText(Path.Combine(gameRoot, "gta_sa.exe")));
+        Assert.Equal("original game script", File.ReadAllText(Path.Combine(scriptDir, "main.scm")));
+    }
+
+    [Fact]
+    public void Plan_refuses_streamed_scripts_inside_script_img_not_just_the_loose_main_scm()
+    {
+        // Verified against a real save file: San Andreas stores a table of streamed-script records
+        // referencing script.img's entries by index (DANCER, PCHAIR, OTBWTCH, PEDROUL …). Replacing
+        // one leaves an existing save holding a live reference into bytecode that no longer matches
+        // it, and saves live outside the game folder where SAFT's backups can't reach — so these are
+        // refused exactly like main.scm, even though they ARE archive entries SAFT could patch.
+        var gameRoot = TestScratch.NewDir();
+        Directory.CreateDirectory(Path.Combine(gameRoot, "models"));
+        Directory.CreateDirectory(Path.Combine(gameRoot, "data", "script"));
+        File.WriteAllText(Path.Combine(gameRoot, "gta_sa.exe"), "stub");
+        ImgArchive.Write(Path.Combine(gameRoot, "models", "gta3.img"), new[] { File_("banshee.dff", "original car") });
+        ImgArchive.Write(Path.Combine(gameRoot, "data", "script", "script.img"), new[]
+        {
+            File_("dancer.scm", "original streamed script"),
+        });
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "dancer.scm"), "a modified streamed script");
+        File.WriteAllText(Path.Combine(modSource, "banshee.dff"), "modded car");
+
+        File.WriteAllText(Path.Combine(gameRoot, "data", "script", "main.scm"), "the original main script");
+        File.WriteAllText(Path.Combine(modSource, "main.scm"), "a modified main script");
+
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+
+        // Both are refused, but they're told apart: one is swapped by hand, the other only via
+        // extract-and-rebuild, so the app can give the right instructions for each.
+        Assert.Equal(2, plan.RefusedScripts.Count);
+        Assert.Equal(RefusedScriptKind.StreamedScript, plan.RefusedScripts.Single(s => s.FileName == "dancer.scm").Kind);
+        Assert.Equal(RefusedScriptKind.MainScript, plan.RefusedScripts.Single(s => s.FileName == "main.scm").Kind);
+        Assert.DoesNotContain(plan.Matches, m => m.FileName.EndsWith(".scm", StringComparison.OrdinalIgnoreCase));
+        Assert.Single(plan.Matches); // the car still installs normally
+
+        DirectModInstaller.Apply(plan, backupOutputFolder: null);
+
+        using var scriptImg = ImgArchive.Open(Path.Combine(gameRoot, "data", "script", "script.img"));
+        using var entry = scriptImg.OpenEntry(scriptImg.Entries.Single());
+        using var reader = new StreamReader(entry);
+        Assert.StartsWith("original streamed script", reader.ReadToEnd());
+    }
 }
