@@ -1,17 +1,18 @@
 
 
-
 SAFT — San Andreas File Tool 
 =============================
 
 -Developed by Divinakra, August 2026
 
--SAFT is portable 32-bit Windows Tool compatible with any build or version of the PC game: GTA San Andreas, 
-only the originals v1-v3. Not the definitive edition. It also runs well in certain PC emulators on Android.
-But I do not mean that it modifies the Android port of GTA-SA, I mean it modifies the original PC Game 
-Within an emulated windows container on Android as well as normal windows computers. 
+-SAFT is a portable 32-bit Windows Tool compatible with any build or version of the PC game: GTA San Andreas,
+only the originals v1-v3, not the Definitive Edition.
 
--SAFT contains no assets, and only allows for users to modify their own GTA SA Game with their own mods.
+-SAFT also runs well in certain PC emulators on Android — to be clear, that means SAFT modifies the
+original PC Game and SAFT can launch and function inside an emulated Windows container on Android.
+SAFT cannot modify the Android port of GTA SA, only PC.
+
+-SAFT contains no Game assets, and only allows for users to modify their own GTA SA Game with their own mods.
 
 -SAFT is a file extractor, identifier and replacer; it knows where every modified file goes, based on name.
 
@@ -51,8 +52,8 @@ famous version 1.0 also known as the "hoodlum" version, which is not as polished
 versions of Rockstar's PC game, GTA San Andreas. SAFT is not meant for any other games other than GTA
 San Andreas but SAFT is meant for any and all versions of that one Game, and only on one system: PC.
 
-SAFT is also ideal for those who don't want to mess with mod loaders, mod managers or cleo. Mod loaders
-And especially Cleo can break compatibility with PC Emulators. This Application, SAFT,  is a
+SAFT is also ideal for those who don't want to mess with mod loaders, mod managers or Cleo. Mod loaders
+— and especially Cleo — can break compatibility with PC emulators. This is a
 traditional, clean and lean file tool, and your game directory wont have any extra files in it, if
 you don't want it to. With SAFT mods, GTA SA can look and play like a vanilla new copy of GTA SA, and 
 will run more stable in PC emulation on Android handhelds, even though the whole game could be completely
@@ -73,38 +74,39 @@ And as long as they are named correctly.
 
 This tool does not contain any games or mods, it's just a file replacer, as long as you bring your own
 GTA San Andreas PC game, and some mods, this tool can do all the work of replacing the game's vanilla
-files with your modded files. SAFT knows the file structure of whole San Andreas PC Game very well, and
-as long as your mod files are named exactly the same as the vanilla game files they aim to replace,
-SAFT will scan your whole mod folder, and pick all the replaceable files and will replace them in your 
-game directory. There are options built into SAFT that will automatically back up your vanilla files,
-to anywhere you tell it to, so maybe make a folder called "vanilla" and tell it to back everything up
-there before you modify some files that you regret later. That way if you don't want the mods anymore,
-you can just use SAFT to replace the modded files back with the vanilla files using the same tool. 
+files with your modded files. SAFT scans your whole San Andreas PC Game directory and as long as your
+mod files are named exactly the same as the vanilla game files they aim to replace, SAFT will scan your
+whole mod folder, and pick all the replaceable files and will replace them in your game directory. There
+are options built into SAFT that will automatically back up your vanilla files, to anywhere you tell it
+to, so maybe make a folder called "backups" and tell it to back everything up there before you modify
+some files that you regret later. That way if you don't want the mods anymore, you can just use SAFT to
+replace the modded files back with the vanilla files using the 5th "Uninstall Mod(s)" tab.
 
 SAFT also has an extraction tool built into it, and can extract your whole GTA San Andreas Game into
-an organized folder structure with all the individually named vanilla game files for you to manually 
+an organized folder structure with all the individually named vanilla game files for you to manually
 replace as you please. SAFT also has a tool that allows you to rebuild the game from whatever is
-currently in your extracted folder. The extracted folder is bigger than the game folder. So only 
+currently in your extracted folder. The extracted folder is bigger than the game folder. So only
 extract if you have some free space available. SAFT will warn you about storage requirements.
+SAFT will not extract the audio archives by default becuase of how much more storage and time it
+takes to extract all the audio files, so if you are an audio mod dev, you can choose to also extract
+the aduio with the "Extract Audio As well?" check box.
 
-You can also use your extracted folder as a backup, which will give you the confidence
-to use SAFT'S quicker and more destructive modding tools with ease, knowing everything is backed up 
-in your extraction folder. By quick and destructive I am referring the fourth option from the 
-right called "Install Mod(s) without Extraction" > "Replace files without backups" this is the most
-destructive tool contained within SAFT and allows you replace files instantaneously within your game 
-directory without extracting anything or backing anything up. It's like going through a drive through 
-and ordering some chicken and meanwhile your pistons get replaced out of nowhere. This works very fast
-as long as you don't try to replace with any huge files. If SAFT notices that the mod files you are 
-providing are bigger in size than the vanilla files they replace, it will tell you that the archive
-needs rebuilding. You can tell it no, and stop the file replacement before it happens, or you can say,
-"yes" and it will still work just as seamlessly as with small files, but it will take a bit longer. 
-Thats because SAFT is not only replacing a file, its gotta make room for your big files and rebuild
-the archive around it. The "archive" its referring to is the "gta3.img" or "player.img" that all the
-individual game files are contained within. 
+Most people who are not mod developers and are mod users and gamers will want to use the fourth option
+from the right called "Install Mod(s) without Extraction" then leave the first bullet selected:
+"Backup original files before replacing (reccomended)" as this will enable future clean mod uninstalls.
+This is the most destructive tool contained within SAFT and allows you to replace files instantaneously
+within your game directory without extracting anything (or backing anything up if you dont want to). This
+works very fast as long as you don't try to replace with any huge files. If SAFT notices that the mod
+files you are providing are bigger in size than the vanilla files they replace, it will tell you that
+the archive needs rebuilding. You can tell it no, and stop the file replacement before it happens, or
+you can say, "yes" and it will still work just as seamlessly as with small files, but it will take a
+bit longer. Thats because SAFT is not only replacing a file, its gotta make room for your big files
+and rebuild the archive around it. The "archive" its referring to is the "gta3.img" or "player.img"
+that all the individual game files and assets are contained within.
 
-SAFT also is a windows exe that is designed to also run in certain windows PC emulators, The two that 
-Are currently known to work are Winlator official and Winlator Bionic Vanilla/Ludashi by StevenMXZ. For
-More detailed settings for those emulators that work see the "Emulator Settings" Section of this Readme.
+SAFT is a windows exe that is designed to also run in certain windows PC emulators. The two that
+are currently known to work are Winlator Official and Winlator Bionic Vanilla/Ludashi by StevenMXZ. For
+more detailed settings for those emulators that work see the "Emulator Settings" section of this Readme.
 
 Note* SAFT works with mods that use Cleo to load their assets, as long as the assets are named the same
 as they are named in the original game. SAFT will permanently load those mod files into your directory
@@ -128,8 +130,8 @@ to see the full folder structure of the mod. That main mod folder is what you wa
 4. Then click "Install mod(s) Without Extraction"
 
 5. Then browse for your "Game Folder" where the gta-sa.exe is located, and select that folder that 
-contains your gta-sa.exe as the "Game Folder". (it doesn't matter what your game .exe is named, 
-gta_se.exe or gta-se.exe or gtz-iliketurtles.exe will all work both to mod and launch the game)
+contains your gta-sa.exe as the "Game Folder". (it doesn't matter what your game .exe is named,
+gta_sa.exe or gta-sa.exe or ahksgwhdiuh.exe will all work both to mod and launch the game)
 
 6. Then for "Mod Folder", browse to the mod folder you downloaded and unzipped in step 3.
 
@@ -145,14 +147,21 @@ needs to be rebuilt, then just rebuild it, there's nothing lost here, that's nor
 SAFT needs to make room for your bigger mods. Otherwise the modded files will simply now live in your
 game directory in place of the vanilla files. Your done. It's really that easy. Launch game normally.
 
-10. If you are someone who wants to extract the whole game, and manually replace files, and rebuild it 
-afterwards, simply use the first three tabs in that order "extract" "install" then "rebuild". You get 
+10. If you want to uninstall a mod or a list of mods, you must have already backed up the original game
+files into distinct backup folders, for each mod or groups of mods that you might want uninstalled.
+Then simply use the 5th tab from the right as you have used all the others, whatever vanilla game
+files it finds in your backup folder, it will put back into your game directory where they belong,
+getting rid of the currently loaded mod files. If you want to uninstall all your mods, just keep
+all your vanilla game files backed up in one big folder and then select that as your backup folder.
+
+11. If you are someone who wants to extract the whole game, and manually replace files, and rebuild it
+afterwards, simply use the first three tabs in that order "extract" "install" then "rebuild". You get
 the same result as someone who uses the fourth option, but you will be more intimately connected
-with the names of the files and how they are laid out. Mod developers will often want to use this option, 
-whereas gamers and mod-users will usually want to use the fourth faster option. If you are a mod dev and 
-want to modify the audio, make sure to click the option under extraction to "extract audio files as well". 
+with the names of the files and how they are laid out. Mod developers will often want to use this option,
+whereas gamers and mod-users will usually want to use the fourth faster option. If you are a mod dev and
+want to modify the audio, make sure to click the option under extraction to "extract audio files as well".
 This is unselected by default because it takes forever to extract the whole game including audio. If
-you are A casual gamer, just make sure your mod folder has audio in a nested folder structure and not 
+you are a casual gamer, just make sure your mod folder has audio in a nested folder structure and not
 just loose .wav and .ogg files, as audio is the only file that needs nested folders to be id'd by SAFT.
 
 
@@ -164,7 +173,7 @@ All mod files must be named identically to the games files for SAFT to replace t
 
 SAFT only accepts the native GTA SA file types, no .DAE for models, no mp3 for audio... ect..
 
-1. For Models: .dff files are accepted (use DragonDFF plugin for blender)
+1. For Models: .dff (use DragonDFF plugin for blender)
 2. For Collision: .col
 3. For Textures: .txd 
 4. For Animations: .ifp
@@ -206,7 +215,7 @@ Box64 preset: Stability
 
 Startup Selection: Any, even Aggressive works.
 
-Wine Version: Winlator Official 11.1 I used default wine settings. 
+Wine Version: default wine settings on official winlator. For StevenMXZ, see line directly below.
 
 For Winlator Bionic I  used Proton-9.0-x86_64-0 (this is box, not fex)
 
@@ -236,7 +245,7 @@ Wine version: default (comes with box not fix)
 
 DXVK version: 1.10.3
 
-GPU Driver: Turnip (default) 25.1.0
+GPU Driver: Turnip (default) 25.1.0 (if you are not on a SD865 maybe try other drivers.)
 
 Screen size/Reoslution: 1920 x 1080
 
