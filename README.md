@@ -229,7 +229,7 @@ this simple, only the best one is included here.
 - **Startup Selection:** Aggressive
 - **Wine version:** default (comes with box not fex)
 - **DXVK version:** 1.10.3
-- **GPU Driver:** Turnip (default) 25.1.0
+- **GPU Driver:** Turnip (default) 25.1.0 (if you are not on a SD865 maybe try other drivers.)
 - **Screen size/Resolution:** 1920 x 1080
 
 **Game Display Advanced Settings:**
