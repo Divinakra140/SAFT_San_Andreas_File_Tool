@@ -75,7 +75,7 @@ whole mod folder, and pick all the replaceable files and will replace them in yo
 are options built into SAFT that will automatically back up your vanilla files, to anywhere you tell it
 to, so maybe make a folder called "backups" and tell it to back everything up there before you modify 
 some files that you regret later. That way if you don't want the mods anymore,you can just use SAFT to
-replace the modded files back with the vanilla files using the same tool.
+replace the modded files back with the vanilla files using the 5th "Uninstall Mod(s) tab.
 
 SAFT also has an extraction tool built into it, and can extract your whole GTA San Andreas Game into
 an organized folder structure with all the individually named vanilla game files for you to manually
