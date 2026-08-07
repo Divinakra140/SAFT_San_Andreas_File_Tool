@@ -204,7 +204,7 @@ Larger .wav or .ogg file size than the vanilla file you are replacing.
 
 ### Running SAFT
 
-Tested and verified to work on [Winlator Official 11.1 Final by Brunodev]((https://github.com/brunodev85/winlator/releases/tag/v11.1.0).
+Tested and verified to work on [Winlator Official 11.1 Final by Brunodev](https://github.com/brunodev85/winlator/releases/tag/v11.1.0).
 
 Tested and verified to work on [Winlator Bionic Vanilla 3.1 Hotfix by StevenMXZ](https://github.com/StevenMXZ/Winlator-Ludashi/releases/tag/v3.1.h).
 
