@@ -90,8 +90,14 @@ public sealed record DirectAudioSummary(string MatchKey, bool BackedUp);
 
 public sealed record DirectStreamSummary(string MatchKey, bool BackedUp);
 
+/// <summary>One matched sound/track that couldn't actually be patched — a corrupted or unreadable mod file, most often — with the reason, so it's reported clearly instead of aborting everything else.</summary>
+public sealed record DirectAudioFailure(string MatchKey, string Reason);
+
+public sealed record DirectStreamFailure(string MatchKey, string Reason);
+
 public sealed record DirectInstallResult(
-    IReadOnlyList<DirectInstallSummary> Archives, IReadOnlyList<DirectAudioSummary> Audio, IReadOnlyList<DirectStreamSummary> Streams);
+    IReadOnlyList<DirectInstallSummary> Archives, IReadOnlyList<DirectAudioSummary> Audio, IReadOnlyList<DirectStreamSummary> Streams,
+    IReadOnlyList<DirectAudioFailure> AudioFailed, IReadOnlyList<DirectStreamFailure> StreamFailed);
 
 /// <summary>
 /// Installs mod-replacement files straight into a game's live archives, SFX banks, and streamed
@@ -149,11 +155,20 @@ public static class DirectModInstaller
                 var matchKey = FileFilters.GetLastPathSegments(sourcePath, 3); // Package/Bank_NNN/sound_NNN.wav
                 if (matchKey is not null && audioIndex.TryGetValue(matchKey, out var slot))
                 {
-                    var (pcm, sampleRate) = WavPcm.ReadMono16Wav(sourcePath);
-                    audioMatches.Add(new DirectAudioMatch(
-                        matchKey, sourcePath, slot.Package.AbsolutePath, slot.PackageRelativePath,
-                        slot.BankHeaderOffset, slot.BankLength, slot.SoundIndex, slot.OriginalPcmLength,
-                        pcm.Length, sampleRate));
+                    try
+                    {
+                        var (pcm, sampleRate) = WavPcm.ReadMono16Wav(sourcePath);
+                        audioMatches.Add(new DirectAudioMatch(
+                            matchKey, sourcePath, slot.Package.AbsolutePath, slot.PackageRelativePath,
+                            slot.BankHeaderOffset, slot.BankLength, slot.SoundIndex, slot.OriginalPcmLength,
+                            pcm.Length, sampleRate));
+                    }
+                    catch (Exception ex)
+                    {
+                        // A corrupted/unreadable .wav must not stop scanning the rest of the mod
+                        // folder — report it clearly instead.
+                        audioUnmatched.Add($"{matchKey} (unreadable: {ex.Message})");
+                    }
                 }
                 else
                 {
@@ -289,51 +304,70 @@ public static class DirectModInstaller
         }
 
         var audioSummaries = new List<DirectAudioSummary>();
+        var audioFailed = new List<DirectAudioFailure>();
         for (var i = 0; i < audioToApply.Count; i++)
         {
             var match = audioToApply[i];
-            var backedUp = false;
-
-            if (backupOutputFolder is not null)
-            {
-                BackupAudioOriginal(match, backupOutputFolder);
-                backedUp = true;
-            }
-
-            var (pcm, _) = WavPcm.ReadMono16Wav(match.ModFilePath);
-            PatchAudioSound(match, pcm);
 
             progress?.Report(new DirectInstallProgress(
                 match.MatchKey, byArchive.Count + 1, totalGroups, "Patching audio in place", i + 1, audioToApply.Count));
 
-            audioSummaries.Add(new DirectAudioSummary(match.MatchKey, backedUp));
+            try
+            {
+                var backedUp = false;
+                if (backupOutputFolder is not null)
+                {
+                    BackupAudioOriginal(match, backupOutputFolder);
+                    backedUp = true;
+                }
+
+                var (pcm, _) = WavPcm.ReadMono16Wav(match.ModFilePath);
+                PatchAudioSound(match, pcm);
+
+                audioSummaries.Add(new DirectAudioSummary(match.MatchKey, backedUp));
+            }
+            catch (Exception ex)
+            {
+                // A single corrupted/unreadable mod file (a malformed .wav, most often) must not
+                // derail everything else already patched or still queued up — record it and move
+                // on to the rest, same as an oversized match is already skipped-and-reported.
+                audioFailed.Add(new DirectAudioFailure(match.MatchKey, ex.Message));
+            }
         }
 
         var streamSummaries = new List<DirectStreamSummary>();
+        var streamFailed = new List<DirectStreamFailure>();
         var streamGroupIndex = byArchive.Count + (audioToApply.Count > 0 ? 1 : 0) + 1;
         for (var i = 0; i < streamsToApply.Count; i++)
         {
             var match = streamsToApply[i];
-            var backedUp = false;
-
-            if (backupOutputFolder is not null)
-            {
-                BackupStreamOriginal(match, backupOutputFolder);
-                backedUp = true;
-            }
-
-            var newPayload = File.ReadAllBytes(match.ModFilePath);
-            if (!StreamIndex.LooksLikeOgg(newPayload))
-                throw new InvalidDataException($"'{match.ModFilePath}' doesn't look like a valid Ogg file (missing 'OggS' header).");
-            PatchStreamTrack(match, newPayload);
 
             progress?.Report(new DirectInstallProgress(
                 match.MatchKey, streamGroupIndex, totalGroups, "Patching streamed audio in place", i + 1, streamsToApply.Count));
 
-            streamSummaries.Add(new DirectStreamSummary(match.MatchKey, backedUp));
+            try
+            {
+                var backedUp = false;
+                if (backupOutputFolder is not null)
+                {
+                    BackupStreamOriginal(match, backupOutputFolder);
+                    backedUp = true;
+                }
+
+                var newPayload = File.ReadAllBytes(match.ModFilePath);
+                if (!StreamIndex.LooksLikeOgg(newPayload))
+                    throw new InvalidDataException($"'{match.ModFilePath}' doesn't look like a valid Ogg file (missing 'OggS' header).");
+                PatchStreamTrack(match, newPayload);
+
+                streamSummaries.Add(new DirectStreamSummary(match.MatchKey, backedUp));
+            }
+            catch (Exception ex)
+            {
+                streamFailed.Add(new DirectStreamFailure(match.MatchKey, ex.Message));
+            }
         }
 
-        return new DirectInstallResult(summaries, audioSummaries, streamSummaries);
+        return new DirectInstallResult(summaries, audioSummaries, streamSummaries, audioFailed, streamFailed);
     }
 
     private static void BackupAudioOriginal(DirectAudioMatch match, string backupOutputFolder)
@@ -430,11 +464,29 @@ public static class DirectModInstaller
     /// </summary>
     private static void RebuildArchiveWithReplacements(string archiveAbsolutePath, IReadOnlyList<DirectInstallMatch> matches, Action<int, int>? onProgress)
     {
+        var logDir = Path.GetDirectoryName(archiveAbsolutePath)!;
+        DiagnosticLog.Write(logDir, $"RebuildArchiveWithReplacements: starting for '{archiveAbsolutePath}' ({matches.Count} replacement(s))");
+
         var replacementsByName = matches.ToDictionary(m => m.EntryName, m => m.ModFilePath, StringComparer.OrdinalIgnoreCase);
         var tempPath = archiveAbsolutePath + ".saft-tmp";
 
+        // A previous attempt that failed after finishing the rebuild but before the final move
+        // (exactly what just happened) leaves this file behind — always start from a guaranteed-
+        // fresh path rather than relying on ImgArchive.Write's FileMode.Create to correctly
+        // overwrite whatever's already there.
+        DiagnosticLog.Write(logDir, $"Checking for leftover temp file at '{tempPath}'");
+        if (File.Exists(tempPath))
+        {
+            DiagnosticLog.Write(logDir, "Leftover temp file found — deleting it");
+            File.Delete(tempPath);
+            DiagnosticLog.Write(logDir, "Leftover temp file deleted");
+        }
+
+        DiagnosticLog.Write(logDir, "Opening original archive for reading");
         using (var archive = ImgArchive.Open(archiveAbsolutePath))
         {
+            DiagnosticLog.Write(logDir, $"Original archive opened successfully — {archive.Entries.Count} entries");
+
             var files = archive.Entries
                 .Select(entry => (
                     Name: entry.Name,
@@ -444,10 +496,23 @@ public static class DirectModInstaller
                             : archive.OpenEntry(entry))))
                 .ToList();
 
-            ImgArchive.Write(tempPath, files, onFileWritten: onProgress);
+            DiagnosticLog.Write(logDir, $"Starting ImgArchive.Write to '{tempPath}' with {files.Count} file(s)");
+            ImgArchive.Write(tempPath, files, onFileWritten: (done, total) =>
+            {
+                if (done == 1 || done == total || done % 2000 == 0)
+                    DiagnosticLog.Write(logDir, $"Write progress: {done} of {total}");
+                onProgress?.Invoke(done, total);
+            });
+            DiagnosticLog.Write(logDir, "ImgArchive.Write completed");
         } // read handle on the original must close before we overwrite it
+        DiagnosticLog.Write(logDir, "Original archive handle closed");
 
-        File.Copy(tempPath, archiveAbsolutePath, overwrite: true);
-        File.Delete(tempPath);
+        // A rename (same volume, since tempPath is right next to archiveAbsolutePath), not a full
+        // second read-and-write of the whole archive — File.Copy+Delete here was doing needless
+        // extra I/O of the entire archive a second time for no reason, which matters a lot more on
+        // a resource-constrained platform than on a real Windows machine with I/O to spare.
+        DiagnosticLog.Write(logDir, $"Moving '{tempPath}' into place over '{archiveAbsolutePath}'");
+        FileReplace.MoveOver(tempPath, archiveAbsolutePath);
+        DiagnosticLog.Write(logDir, "Move completed successfully — rebuild finished");
     }
 }

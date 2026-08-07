@@ -1,17 +1,6 @@
 <Project>
 
-  <!--
-    This repo lives on an exFAT SD card. macOS silently drops "._*" AppleDouble
-    sidecar files next to every file written here (to hold xattrs exFAT can't
-    store natively), and MSBuild's default item globs would otherwise try to
-    compile them as source. Exclude them everywhere.
-  -->
-  <ItemGroup>
-    <Compile Remove="**/._*" />
-    <Compile Remove="**/._*/**" />
-    <Content Remove="**/._*" />
-    <None Remove="**/._*" />
-    <EmbeddedResource Remove="**/._*" />
-  </ItemGroup>
+  <!-- See Directory.Build.targets for the "._*" AppleDouble sidecar file exclusion — it has to
+       live there, not here, since .props is imported before the SDK's default item globs exist. -->
 
 </Project>

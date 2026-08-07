@@ -56,6 +56,15 @@ public static class WavPcm
             var chunkSize = reader.ReadInt32();
             var chunkStart = stream.Position;
 
+            // A malformed/corrupted .wav (seen in the wild from third-party mod exports) can have
+            // a garbage chunk size here — negative, or bigger than what's actually left in the
+            // file. Left unchecked, reading that many bytes either throws a cryptic
+            // OverflowException (negative sizes specifically) or something equally unhelpful for
+            // an oversized one; a clear message naming the actual file is far more useful.
+            if (chunkSize < 0 || chunkSize > stream.Length - chunkStart)
+                throw new InvalidDataException(
+                    $"'{path}' has a corrupted or invalid '{chunkId}' chunk (declared size {chunkSize:N0} bytes, but only {stream.Length - chunkStart:N0} remain in the file).");
+
             if (chunkId == "fmt ")
             {
                 reader.ReadInt16(); // format tag

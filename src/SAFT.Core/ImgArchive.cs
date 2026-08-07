@@ -123,8 +123,11 @@ public sealed class ImgArchive : IDisposable
     /// <summary>
     /// Writes a new VER2 archive to <paramref name="destinationPath"/> from a set of named byte sources,
     /// in the given order. Each source's length is padded up to the next 2048-byte sector boundary.
-    /// <paramref name="onFileWritten"/>, if given, is called after each file's content is copied —
-    /// the only step here slow enough (many small files) to need progress feedback.
+    /// <paramref name="onFileWritten"/>, if given, is called periodically (every 25th file, plus
+    /// always on the last one) as files are copied — the only step here slow enough (many small
+    /// files) to need progress feedback, but throttled rather than called for literally every
+    /// file, since posting tens of thousands of cross-thread UI updates in a tight loop can
+    /// overwhelm the receiving thread faster than it can keep up.
     /// </summary>
     public static void Write(
         string destinationPath,
@@ -181,7 +184,17 @@ public sealed class ImgArchive : IDisposable
             using var content = files[i].OpenContent();
             content.CopyTo(outStream);
             PadToSector(outStream);
-            onFileWritten?.Invoke(i + 1, files.Count);
+
+            // Reporting on every single file — tens of thousands of times for a big archive —
+            // posts that many cross-thread UI updates in a tight loop. If the UI thread can't
+            // drain that queue as fast as this one produces it (plausible under a slower/
+            // constrained runtime), the backlog keeps growing until something gives out well
+            // into the write, not at any fixed point — exactly the failure pattern this was
+            // built to avoid. Throttled to a still-smooth-looking rate; always fires on the last
+            // file so callers relying on the final callback (e.g. to reach 100%) still get it.
+            var done = i + 1;
+            if (onFileWritten is not null && (done == files.Count || done % 25 == 0))
+                onFileWritten(done, files.Count);
         }
     }
 

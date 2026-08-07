@@ -6,8 +6,10 @@ SAFT — San Andreas File Tool
 
 -Developed by Divinakra, August 2026
 
--SAFT is portable Windows Tool compatible with any build or version of the PC game: GTA San Andreas, 
-only the originals v1-v3. Not the definitive edition.
+-SAFT is portable 32-bit Windows Tool compatible with any build or version of the PC game: GTA San Andreas, 
+only the originals v1-v3. Not the definitive edition. It also runs well in certain PC emulators on Android.
+But I do not mean that it modifies the Android port of GTA-SA, I mean it modifies the original PC Game 
+Within an emulated windows container on Android as well as normal windows computers. 
 
 -SAFT contains no assets, and only allows for users to modify their own GTA SA Game with their own mods.
 
@@ -49,13 +51,14 @@ famous version 1.0 also known as the "hoodlum" version, which is not as polished
 versions of Rockstar's PC game, GTA San Andreas. SAFT is not meant for any other games other than GTA
 San Andreas but SAFT is meant for any and all versions of that one Game, and only on one system: PC.
 
-SAFT is also ideal for those who don't want to mess with mod loaders, mod managers or cleo. This is a
+SAFT is also ideal for those who don't want to mess with mod loaders, mod managers or cleo. Mod loaders
+And especially Cleo can break compatibility with PC Emulators. This Application, SAFT,  is a
 traditional, clean and lean file tool, and your game directory wont have any extra files in it, if
 you don't want it to. With SAFT mods, GTA SA can look and play like a vanilla new copy of GTA SA, and 
-will run more stable in PC emulation on Android handhelds for example, even though the whole game
-could be completely modified and different than stock, it runs like stock. Think of a Mod Loader like 
-a turbocharger and think of a SAFT like installing new engine parts on a naturally aspirated car. SAFT 
-modifies the game from the inside-out, whereas mod loaders modify the game from the outside-in.
+will run more stable in PC emulation on Android handhelds, even though the whole game could be completely
+modified and different than stock, it runs like stock. Think of a Mod Loader like a turbocharger and think 
+of a SAFT like installing new engine parts on a naturally aspirated car. SAFT modifies the game from the 
+inside-out, whereas mod loaders modify the game from the outside-in.
 
 SAFT is like the mechanic who understands your car very well, and can quickly and cleanly install any 
 new engine parts you want to bring to him as long as they fall into the 5 categories: 
@@ -86,9 +89,9 @@ extract if you have some free space available. SAFT will warn you about storage 
 
 You can also use your extracted folder as a backup, which will give you the confidence
 to use SAFT'S quicker and more destructive modding tools with ease, knowing everything is backed up 
-in your extraction folder. By quick and destructive I am referring the last option all the way on the
+in your extraction folder. By quick and destructive I am referring the fourth option from the 
 right called "Install Mod(s) without Extraction" > "Replace files without backups" this is the most
-destructive tool contained within SAFT and allows you to replace files instantaneously within your game 
+destructive tool contained within SAFT and allows you replace files instantaneously within your game 
 directory without extracting anything or backing anything up. It's like going through a drive through 
 and ordering some chicken and meanwhile your pistons get replaced out of nowhere. This works very fast
 as long as you don't try to replace with any huge files. If SAFT notices that the mod files you are 
@@ -98,6 +101,10 @@ needs rebuilding. You can tell it no, and stop the file replacement before it ha
 Thats because SAFT is not only replacing a file, its gotta make room for your big files and rebuild
 the archive around it. The "archive" its referring to is the "gta3.img" or "player.img" that all the
 individual game files are contained within. 
+
+SAFT also is a windows exe that is designed to also run in certain windows PC emulators, The two that 
+Are currently known to work are Winlator official and Winlator Bionic Vanilla/Ludashi by StevenMXZ. For
+More detailed settings for those emulators that work see the "Emulator Settings" Section of this Readme.
 
 Note* SAFT works with mods that use Cleo to load their assets, as long as the assets are named the same
 as they are named in the original game. SAFT will permanently load those mod files into your directory
@@ -109,8 +116,7 @@ directory if you know how to do that. SAFT only knows how to replace files alrea
 User Guide:
 ----------
 
-1. Open up 64-bit SAFT folder and double click SAFT.exe. If you are on a 32-bit (weaker) computer,
-then use the 32-bit SAFT.exe instead. 
+1. Open up the SAFT folder and double click SAFT.exe.
 
 2. Decide what you want to do, do you want to quickly replace some files? Or do you want to extract 
 your whole game and manually sort through files replacing them manually and then rebuilding the game
@@ -119,7 +125,7 @@ from that extracted folder?
 3. For quick replacement of files. Simply find the mod(s) you want online and unzip the .zip archive 
 to see the full folder structure of the mod. That main mod folder is what you want to provide to SAFT.
 
-4. Then click "Install mod(s) Without Extraction" 
+4. Then click "Install mod(s) Without Extraction"
 
 5. Then browse for your "Game Folder" where the gta-sa.exe is located, and select that folder that 
 contains your gta-sa.exe as the "Game Folder". (it doesn't matter what your game .exe is named, 
@@ -185,6 +191,73 @@ NOTE* music and SFX cannot be any bigger than the vanilla song or SFX file size.
 Accepted by SAFT and by GTA SA and your audio file will remain vanilla if attempting to replace with a 
 Larger .wav or .ogg file size than the vanilla file you are replacing. 
 
+===================================================================================================================
+EMULATOR SETTINGS : tested only on Retroid Pocket Flip 2 SD865
+===================================================================================================================
+
+Emulator Settings: for running SAFT
+-----------------------------------
+
+Tested and verified to work  on Winlator Official 11.1 Final by Brunodev
+
+Tested and veriied to work on Winlator Bionic Vanilla 3.1 Hotfix by StevenMXZ.
+
+Box64 preset: Stability
+
+Startup Selection: Any, even Aggressive works.
+
+Wine Version: Winlator Official 11.1 I used default wine settings. 
+
+For Winlator Bionic I  used Proton-9.0-x86_64-0 (this is box, not fex)
+
+DXVK Version: 2.3.1 worked in Bionic and 2.4.1 worked in Official (default for both)
+
+GPU driver was default for both, newest mxz turnip 26.2.0 R7-Oneui was also used and worked.
+
+Screen size can be reduced to 940 x 544 to see text more clearly, works at larger resolutions. 
+
+In fact, 960 x 544 is the recommended screen size to use SAFT for ease and highest speed
+While keeping all features visible and clickable. 
+
+
+Emulator Settings: For running GTA-SA (V3, 2014 steam)
+------------------------------------------------------
+
+Tested and verified to work with the most competitive speeds and quality on 5 different apps,
+To make this simple, we will only include the best one for this Game.
+
+Winlator Star 11-2 Stable Build by Jacojayy (1080p at stable 60FPS) full range: 50-100FPS.
+
+Box64 Preset: Performance
+
+Startup Selection: Aggressive
+
+Wine version: default (comes with box not fix) 
+
+DXVK version: 1.10.3
+
+GPU Driver: Turnip (default) 25.1.0
+
+Screen size/Reoslution: 1920 x 1080
+
+Game Display Advanced Settings:
+
+Frame Limiter: OFF
+
+Widescreen: On
+
+Visual FX Quality: Low
+
+Note* for archiving and preservation purposes, all three android emulator .apk files have 
+Been bundled into the "Compatible_Emulators.ZIP" in the releases page of the Github to download.
+
+Links to download them from the original authors are here:
+
+Official Winlator 11.1: https://github.com/brunodev85/winlator/releases/tag/v11.1.0
+
+Bionic Vanilla 3.1: https://github.com/StevenMXZ/Winlator-Ludashi/releases/tag/v3.1.h
+
+Winlator Star 11-2: https://github.com/winhub-emu/winhub/releases/tag/star.11-2
 
 ===================================================================================================================
 How SAFT works

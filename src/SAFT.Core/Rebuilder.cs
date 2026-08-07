@@ -241,7 +241,20 @@ public static class Rebuilder
         var tempOutput = Path.Combine(Path.GetTempPath(), "SAFT-rebuild-" + Guid.NewGuid());
         try
         {
-            var summaries = Rebuild(extractionRoot, tempOutput, progress);
+            // Rebuild()'s own reports carry their own group count (e.g. "9" groups); this call has
+            // one more phase after Rebuild() finishes (installing the result into gameRoot below),
+            // so every report coming out of Rebuild() gets rewritten here to count that extra phase
+            // too — keeps the overall progress bar's scale consistent across the whole operation
+            // instead of jumping when the final phase begins. GroupCount also gets captured here so
+            // the install-phase reports below can use the same, correct total.
+            var groupCount = 1;
+            var wrappedProgress = progress is null ? null : new Progress<RebuildProgress>(p =>
+            {
+                groupCount = p.ArchiveCount + 1;
+                progress.Report(p with { ArchiveCount = groupCount });
+            });
+
+            var summaries = Rebuild(extractionRoot, tempOutput, wrappedProgress);
 
             if (makeBackups)
             {
@@ -255,12 +268,26 @@ public static class Rebuilder
                 }
             }
 
-            foreach (var source in Directory.EnumerateFiles(tempOutput, "*", SearchOption.AllDirectories))
+            // Previously silent — for a full game install (tens of thousands of loose files, not
+            // just the handful of archives) this pass alone can take minutes, and with no progress
+            // reporting at all the app looked completely frozen right after "done" showed for the
+            // rebuild itself. Enumerated up front so the total is known for reporting.
+            var filesToInstall = Directory.EnumerateFiles(tempOutput, "*", SearchOption.AllDirectories).ToList();
+            for (var i = 0; i < filesToInstall.Count; i++)
             {
+                var source = filesToInstall[i];
                 var relative = Path.GetRelativePath(tempOutput, source);
                 var destination = Path.Combine(gameRoot, relative);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                File.Copy(source, destination, overwrite: true);
+                // Move, not Copy — tempOutput gets deleted whole right after this loop anyway, so
+                // every file in it is disposable; Move avoids reading and writing potentially huge
+                // archives (gta3.img and friends) a second time for no reason. Goes through
+                // FileReplace (delete-then-move, not an atomic overwrite-move) for the same reason
+                // DirectModInstaller does — see FileReplace's own comment.
+                FileReplace.MoveOver(source, destination);
+
+                if (i == 0 || i + 1 == filesToInstall.Count || (i + 1) % 25 == 0)
+                    progress?.Report(new RebuildProgress("Installing into game folder", groupCount, groupCount, i + 1, filesToInstall.Count));
             }
 
             return summaries;

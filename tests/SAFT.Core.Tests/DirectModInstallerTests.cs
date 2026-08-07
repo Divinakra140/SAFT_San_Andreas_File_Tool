@@ -199,6 +199,105 @@ public class DirectModInstallerTests
     }
 
     [Fact]
+    public void Plan_and_Apply_skip_a_corrupted_audio_mod_file_without_derailing_other_matches_in_the_same_batch()
+    {
+        var gameRoot = BuildGameRoot();
+        var goodOriginalPcm = new byte[] { 1, 0, 2, 0, 3, 0 };
+        var corruptOriginalPcm = new byte[] { 4, 0, 5, 0 };
+        SyntheticAudio.AddSfxPackage(gameRoot, "GENRL", (22050, goodOriginalPcm), (22050, corruptOriginalPcm));
+
+        var modSource = TestScratch.NewDir();
+        var bankDir = Path.Combine(modSource, "GENRL", "Bank_001");
+        Directory.CreateDirectory(bankDir);
+
+        var goodReplacementPcm = new byte[] { 9, 0, 9, 0 };
+        using (var f = File.Create(Path.Combine(bankDir, "sound_001.wav")))
+            WavPcm.WriteMono16Wav(f, goodReplacementPcm, 22050);
+
+        // A hand-corrupted .wav for sound_002: valid RIFF/WAVE/fmt header, but the 'data' chunk
+        // declares an impossible size — exactly the kind of malformed third-party export that used
+        // to throw a cryptic OverflowException and (before this fix) abort the whole install.
+        using (var f = new FileStream(Path.Combine(bankDir, "sound_002.wav"), FileMode.Create, FileAccess.Write))
+        using (var writer = new BinaryWriter(f, System.Text.Encoding.ASCII))
+        {
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+            writer.Write(36);
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("WAVE"));
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("fmt "));
+            writer.Write(16);
+            writer.Write((short)1);
+            writer.Write((short)1);
+            writer.Write(22050);
+            writer.Write(22050 * 2);
+            writer.Write((short)2);
+            writer.Write((short)16);
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("data"));
+            writer.Write(-1); // corrupted: negative declared size
+        }
+
+        // Plan() itself reads every matched .wav (to know its size for the fits-in-place check),
+        // so a corrupted file is caught right there — reported as unmatched-with-a-reason rather
+        // than throwing and aborting the scan of the rest of the mod folder.
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+        Assert.Single(plan.AudioMatches); // only sound_001 made it into a real match
+        var unmatchedEntry = Assert.Single(plan.AudioUnmatched);
+        Assert.Contains("GENRL/Bank_001/sound_002.wav", unmatchedEntry);
+        Assert.Contains("unreadable", unmatchedEntry);
+
+        var result = DirectModInstaller.Apply(plan, backupOutputFolder: null);
+
+        // The good replacement still went through, and nothing about the corrupted file's presence
+        // in the mod folder threw or was silently swallowed without a trace.
+        var patched = Assert.Single(result.Audio);
+        Assert.Equal("GENRL/Bank_001/sound_001.wav", patched.MatchKey);
+        Assert.Empty(result.AudioFailed); // this one never got as far as Apply() at all
+
+        using var packageStream = File.OpenRead(Path.Combine(gameRoot, "audio", "sfx", "GENRL"));
+        var bank = SfxBank.Read(packageStream, 0, new FileInfo(Path.Combine(gameRoot, "audio", "sfx", "GENRL")).Length);
+
+        packageStream.Position = bank.GetPcmOffset(0);
+        var sound1 = new byte[bank.GetPcmLength(0)];
+        packageStream.ReadExactly(sound1);
+        Assert.Equal(new byte[] { 9, 0, 9, 0, 0, 0 }, sound1); // patched
+
+        packageStream.Position = bank.GetPcmOffset(1);
+        var sound2 = new byte[bank.GetPcmLength(1)];
+        packageStream.ReadExactly(sound2);
+        Assert.Equal(corruptOriginalPcm, sound2); // untouched — never matched, so never touched
+    }
+
+    [Fact]
+    public void Apply_reports_an_audio_failure_that_happens_after_Plan_already_succeeded()
+    {
+        // Simulates a match that read fine during Plan() but fails later during Apply() — e.g. the
+        // mod file got deleted/became unreadable in between, or (per real-world evidence from
+        // testing under Wine) a re-read of the same file some time later can behave differently
+        // than the first read did. Apply()'s own try/catch (independent of Plan()'s) is what
+        // protects against exactly this category, which Plan()'s check alone cannot.
+        var gameRoot = BuildGameRoot();
+        var originalPcm = new byte[] { 1, 0, 2, 0, 3, 0 };
+        SyntheticAudio.AddSfxPackage(gameRoot, "GENRL", (22050, originalPcm));
+
+        var modSource = TestScratch.NewDir();
+        var bankDir = Path.Combine(modSource, "GENRL", "Bank_001");
+        Directory.CreateDirectory(bankDir);
+        var modFilePath = Path.Combine(bankDir, "sound_001.wav");
+        using (var f = File.Create(modFilePath))
+            WavPcm.WriteMono16Wav(f, new byte[] { 9, 0, 9, 0 }, 22050);
+
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+        Assert.Single(plan.AudioMatches); // read fine just now
+
+        File.Delete(modFilePath); // ...and now it's gone before Apply() gets to it
+
+        var result = DirectModInstaller.Apply(plan, backupOutputFolder: null);
+
+        Assert.Empty(result.Audio);
+        var failure = Assert.Single(result.AudioFailed);
+        Assert.Equal("GENRL/Bank_001/sound_001.wav", failure.MatchKey);
+    }
+
+    [Fact]
     public void Apply_patches_audio_pcm_in_place_and_can_back_up_the_original_first()
     {
         var gameRoot = BuildGameRoot();
@@ -314,7 +413,7 @@ public class DirectModInstallerTests
     }
 
     [Fact]
-    public void Apply_rejects_a_stream_replacement_that_does_not_look_like_a_real_Ogg_file()
+    public void Apply_reports_a_stream_replacement_that_does_not_look_like_a_real_Ogg_file_instead_of_throwing()
     {
         var gameRoot = BuildGameRoot();
         SyntheticAudio.AddStreamStation(gameRoot, "AA", SyntheticAudio.BuildOggLikePayload(1, 64));
@@ -325,6 +424,12 @@ public class DirectModInstallerTests
         File.WriteAllBytes(Path.Combine(stationDir, "Track_001.ogg"), new byte[] { 1, 2, 3, 4 }); // not an Ogg file
 
         var plan = DirectModInstaller.Plan(gameRoot, modSource);
-        Assert.Throws<InvalidDataException>(() => DirectModInstaller.Apply(plan, backupOutputFolder: null));
+        // Must not throw and abort — a single bad file is reported, not allowed to derail an
+        // install that might otherwise include several other, perfectly good replacements.
+        var result = DirectModInstaller.Apply(plan, backupOutputFolder: null);
+
+        Assert.Empty(result.Streams);
+        var failure = Assert.Single(result.StreamFailed);
+        Assert.Equal("AA/Track_001.ogg", failure.MatchKey);
     }
 }

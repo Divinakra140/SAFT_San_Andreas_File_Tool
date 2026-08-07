@@ -1,17 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    NOTE: this project targets net8.0-windows and uses WPF, which can only be
-    restored/built/run on Windows (the .NET SDK doesn't ship WPF's designer/
-    compiler tooling for macOS or Linux). It was written without being able
-    to compile it — build and smoke-test it here before relying on it.
+    WinForms instead of WPF: WPF's DirectX/DirectWrite-based rendering is poorly supported under
+    Wine (and therefore Winlator, the Wine-based Windows-PC-emulation layer some Android handheld
+    users run this alongside GTA SA itself in). WinForms renders through GDI/GDI+, a much older,
+    far more thoroughly Wine-tested API — a self-contained single-file WinForms exe built exactly
+    like this one was confirmed to run correctly in a real Winlator container, where an equivalent
+    WPF exe did not. Functionally this is a straight port: same four tabs, same SAFT.Core calls,
+    same confirmations/warnings — only the UI toolkit and hand-approximated branding changed.
   -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>..\..\assets\SAFT.ico</ApplicationIcon>
     <AssemblyName>SAFT</AssemblyName>
     <RootNamespace>SAFT.App</RootNamespace>
@@ -22,37 +25,30 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Baked into the single-file publish so the exe needs no external image files at runtime. -->
-    <Resource Include="..\..\assets\icon_s.png">
-      <Link>Assets\icon_s.png</Link>
-    </Resource>
     <!--
-      Swapped between the two "which clouds look" builds: clouds_giant.jpg (single large image,
-      Stretch=UniformToFill in XAML) vs clouds_medium.jpg (small image, TileMode=Tile in XAML).
-      Same Link target both times so the XAML resource reference never has to change.
+      Embedded (not just Content) so every image is baked into the single-file publish itself —
+      the exe needs no external image files or folders sitting next to it at runtime. Loaded at
+      runtime via EmbeddedImages.Load(logicalName), matched to the LogicalName below.
     -->
-    <Resource Include="..\..\assets\panel\clouds_giant.jpg">
-      <Link>Assets\clouds_panel_bg.jpg</Link>
-    </Resource>
-    <Resource Include="..\..\assets\panel\replaces.png"><Link>Assets\panel\replaces.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\models.png"><Link>Assets\panel\models.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\collision.png"><Link>Assets\panel\collision.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\textures.png"><Link>Assets\panel\textures.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\animations.png"><Link>Assets\panel\animations.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\audio.png"><Link>Assets\panel\audio.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\works_with.png"><Link>Assets\panel\works_with.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\any_pc_game_version.png"><Link>Assets\panel\any_pc_game_version.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\of_gta_san_andreas.png"><Link>Assets\panel\of_gta_san_andreas.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\title_wordmark.png"><Link>Assets\panel\title_wordmark.png</Link></Resource>
-    <Resource Include="..\..\assets\panel\title_byline.png"><Link>Assets\panel\title_byline.png</Link></Resource>
+    <EmbeddedResource Include="..\..\assets\icon_s.png"><LogicalName>SAFT.Assets.icon_s.png</LogicalName></EmbeddedResource>
+    <!--
+      PNG, not the original clouds_giant.jpg — Wine's GDI+ (libgdiplus) JPEG decoding has a real
+      history of being unreliable/producing solid-black output on some builds, which is a strong
+      suspect for the black window seen in a Winlator container; PNG decoding is far more
+      consistently supported. Same source photo, just re-encoded losslessly.
+    -->
+    <EmbeddedResource Include="..\..\assets\panel\clouds_giant.png"><LogicalName>SAFT.Assets.clouds_panel_bg.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\replaces.png"><LogicalName>SAFT.Assets.panel.replaces.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\models.png"><LogicalName>SAFT.Assets.panel.models.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\collision.png"><LogicalName>SAFT.Assets.panel.collision.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\textures.png"><LogicalName>SAFT.Assets.panel.textures.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\animations.png"><LogicalName>SAFT.Assets.panel.animations.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\audio.png"><LogicalName>SAFT.Assets.panel.audio.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\works_with.png"><LogicalName>SAFT.Assets.panel.works_with.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\any_pc_game_version.png"><LogicalName>SAFT.Assets.panel.any_pc_game_version.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\of_gta_san_andreas.png"><LogicalName>SAFT.Assets.panel.of_gta_san_andreas.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\title_wordmark.png"><LogicalName>SAFT.Assets.panel.title_wordmark.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\title_byline.png"><LogicalName>SAFT.Assets.panel.title_byline.png</LogicalName></EmbeddedResource>
   </ItemGroup>
-
-  <!--
-    A WPF <SplashScreen> item was tried here and removed — it's the one mechanism that runs
-    before any window or app code, so a resource-path mismatch there can crash the app before
-    anything is ever shown on screen (no console, no visible error). Not worth the risk for a
-    purely cosmetic loading image; skip it rather than debug a mechanism that can't be tested
-    without a Windows machine.
-  -->
 
 </Project>

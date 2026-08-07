@@ -1,0 +1,113 @@
+SAFT — Winlator / Wine Compatibility Changelog
+===============================================
+By Divinakra in regards to the San Andreas File Tool Build 1.1 Adapted for Android PC Emulators
+
+SAFT now runs successfully under Android PC emulation (Winlator), in addition to native Windows.
+This file changelog.txt lists what actually made that happen.
+
+Confirmed working emulators (as of August 2026) : Tested on Retroid Pocket Flip 2 SD865
+-------------------------------------------------
+- Winlator 11.1 Official by bruno dev
+- Winlator Bionic Vanilla 3.1 by StevenMXZ 
+
+Confirmed NOT working (the SAFT app won't even open):
+- Winlator Star 
+- GameHub Lite
+
+Successful Container Settings Used: 
+
+Best Box64 preset: Stability
+
+Startup Selection: Any, even Aggressive works.
+
+Wine Version: Winlator Official 11.1 I used default wine settings. 
+
+For Winlator Bionic I  used Proton-9.0-x86_64-0 this is box, not fex.
+
+DXVK Version: 2.3.1 worked in Bionic and 2.4.1 worked in Official (default for both)
+
+GPU driver was default for both, newest mxz turnip 26.2.0 R7-Oneui was also used and worked.
+
+Screen size can be reduced to 940 x 544 to see text more clearly, works at larger resolutions. 
+
+Changelog
+----------------
+
+1. Rewrote the entire GUI from WPF (what we used on 1.0 stable), to WinForms.
+   WPF renders through DirectX/DirectWrite, which Wine emulates poorly. WinForms renders through
+   GDI/GDI+, a much older and far more thoroughly Wine-tested API. This was the single biggest
+   change — without it, the app didn't render at all under Winlator, even though it ran fine on
+   real Windows.
+
+2. Fixed the clouds background not showing up.
+   The clouds image and the window's main content layer were structured as siblings instead of
+   parent/child. WinForms' "transparent" background only sees through to its actual parent, not
+   whatever's behind it in the same layer, so the content layer's transparency was falling through
+   to a plain gray instead of the clouds behind it.
+
+3. Fixed the log/output list being crushed or missing entirely on some tabs.
+   Label heights were being measured before the window had ever actually been laid out, which
+   wildly overestimated how much space wrapped description text needed. That inflated size ate
+   into — or on some tabs, completely swallowed — the space meant for the log list underneath it.
+
+4. Fixed the Yes/No confirmation windows showing cut-off text and buttons.
+   Same root cause as #3, in the separate confirmation dialog window: its size was locked in
+   before its real, wrapped-text height was known, cutting off both the warning message and the
+   buttons below it.
+
+5. Replaced File.Copy + File.Delete with File.Move when finishing a rebuilt archive.
+   When a mod is too big to patch in place, SAFT rebuilds the whole archive into a temp file, then
+   has to put that file where the original was. The old approach read and wrote the entire archive
+   a second time to do that — slow anywhere, and extra load on Wine's file APIs specifically. A
+   move is a near-instant rename instead of a second full copy.
+
+6. Throttled progress reporting during archive rebuilds.
+   The rebuild was reporting progress on every single file — upwards of 16,000 times for a full
+   archive — each one a message posted across to the app's UI thread. Under Winlator this could
+   build up faster than the UI thread could keep up with, eventually crashing partway through an
+   otherwise-successful rebuild. Reporting every 25th file instead (still looks smooth) resolved a
+   crash that had been happening reliably partway through large rebuilds.
+
+7. Made the final "put the rebuilt archive in place" step crash-safe.
+   The most serious issue: swapping the freshly rebuilt archive in for the original, if
+   interrupted partway through, could destroy the original before the replacement was safely in
+   place. Rewritten so the original is renamed aside first (not deleted), the replacement is moved
+   in, and only then is the set-aside original cleaned up. If the move fails for any reason, the
+   original is automatically restored. Also self-healing: if something ever still manages to leave
+   a set-aside original behind, the next run detects and restores it automatically before doing
+   anything else.
+
+8. Made a single corrupted audio mod file unable to derail an entire install.
+   A malformed .wav (a bad "data chunk size" field, in one real case) could throw an obscure
+   OverflowException that aborted the whole install — including archives already successfully
+   rebuilt and other audio files already patched. Now the bad file's size is validated up front
+   (with a clear error naming the actual file instead of a cryptic crash), and if a file still
+   fails for any other reason during the actual patch, it's skipped and reported by name rather
+   than taking everything else down with it.
+
+9. Fixed overlapping text on the "Install Mod(s) into Extracted" and "Rebuild from Extracted" tabs.
+   The manifest summary (shown after picking an extracted folder) starts out blank and only gets
+   its real, longer, two-line text once a folder is actually picked — so the space reserved for it
+   at startup (based on the blank string) never grew to fit, and the real text overlapped whatever
+   was placed right below it. Fixed the same way as item 3: reserve space for a realistic worst
+   case up front instead of the blank string. Applied the same fix preemptively to the Extract
+   tab's scan-results text, which had the identical risk but hadn't been reported yet.
+
+Result
+------
+All four tabs are now confirmed fully functional under Winlator: extraction,
+installing into an extracted copy, rebuilding, and direct install/rebuild all work. Mods that are
+too big to patch in place (needing a full archive rebuild) install successfully and work correctly
+in-game, confirmed with three separate real-world car mods (a Nissan Skyline, a Nissan 300ZX, and a
+Toyota Supra swap) and a full modpack (an enhanced weapons pack) replacing models, textures, every
+SFX package, and every streamed radio station — all patched successfully with no failures.
+
+
+Current time estimates on tasks within an emulated windows container on android: based on testing every function.
+------------------------------------------------------------------------------
+ Tab 1. Extracting an entire game directory without audio: 1.5 hours
+ Tab 2. Installing mods into extracted directory: 30 seconds or so depending on mod size.
+ Tab 3. Rebuilding game from extracted folder: 10-20 minutes or so
+ Tab 4. Installing mods into game folder without extraction: 30 seconds or so depending on mod size.
+
+- Divinakra
