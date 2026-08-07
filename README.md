@@ -1,13 +1,13 @@
 <img width="1157" height="215" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/IMG_8618.PNG" />
 
-													*Developed by Divinakra, August 2026*
+*Developed by Divinakra, August 2026*
 
 - SAFT is a portable 32-bit Windows tool compatible with any build or version of the PC game: GTA San
   Andreas, only the originals v1-v3, not the Definitive Edition.
-- SAFT also runs well in certain PC emulators on Android — to be clear, that means it modifies the 
-  original PC game running inside an emulated Windows container on Android, not the Android port of 
-  GTA SA itself.
-- SAFT contains no assets, and only allows for users to modify their own GTA SA Game with their own mods.
+- SAFT also runs well in certain PC emulators on Android — to be clear, that means SAFT modifies the 
+  original PC game and SAFT can launch and function inside an emulated Windows container on Android. 
+  SAFT cannot modify the Android port of GTA SA, only PC. 
+- SAFT contains no Game assets, and only allows for users to modify their own GTA SA Game with their own mods.
 - SAFT is a file extractor, identifier and replacer; it knows where every modified file goes, based on name.
 
 Tested extensively against a real Steam release of GTA San Andreas (v3.0, specifically the "newsteam r2"
@@ -47,7 +47,7 @@ famous version 1.0 also known as the "hoodlum" version, which is not as polished
 versions of Rockstar's PC game, GTA San Andreas. SAFT is not meant for any other games other than GTA
 San Andreas but SAFT is meant for any and all versions of that one Game, and only on one system: PC.
 
-SAFT is also ideal for those who don't want to mess with mod loaders, mod managers or cleo. Mod loaders
+SAFT is also ideal for those who don't want to mess with mod loaders, mod managers or Cleo. Mod loaders
 — and especially Cleo — can break compatibility with PC emulators. This is a
 traditional, clean and lean file tool, and your game directory wont have any extra files in it, if
 you don't want it to. With SAFT mods, GTA SA can look and play like a vanilla new copy of GTA SA, and
@@ -142,8 +142,15 @@ directory if you know how to do that. SAFT only knows how to replace files alrea
    needs to be rebuilt, then just rebuild it, there's nothing lost here, that's normal and expected, and
    SAFT needs to make room for your bigger mods. Otherwise the modded files will simply now live in your
    game directory in place of the vanilla files. Your done. It's really that easy. Launch game normally.
+   
+10. If you want to uninstall a mod or a list of mods, you must have already backed up the original game
+    files into distinct backup folders, for each mod or groups of mods that you might want uninstalled.
+	Then simply use the 5th tab from the right as you have used all the others, whatever vanilla game
+	files it finds in your backup folder, it will put back into your game directory where they belong, 
+	getting rid of the currently loaded mod files. If you want to uninstall all your mods, just keep 
+	all your vanilla game files backed up in one big folder and then select that as your backup folder.
 
-10. If you are someone who wants to extract the whole game, and manually replace files, and rebuild it
+11. If you are someone who wants to extract the whole game, and manually replace files, and rebuild it
     afterwards, simply use the first three tabs in that order "extract" "install" then "rebuild". You get
     the same result as someone who uses the fourth option, but you will be more intimately connected
     with the names of the files and how they are laid out. Mod developers will often want to use this
