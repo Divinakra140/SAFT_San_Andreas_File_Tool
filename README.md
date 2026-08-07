@@ -127,7 +127,7 @@ directory if you know how to do that. SAFT only knows how to replace files alrea
 
 5. Then browse for your "Game Folder" where the gta-sa.exe is located, and select that folder that
    contains your gta-sa.exe as the "Game Folder". (it doesn't matter what your game .exe is named,
-   gta_se.exe or gta-se.exe or gtz-iliketurtles.exe will all work both to mod and launch the game)
+   gta_sa.exe or gta-sa.exe or ahksgwhdiuh.exe will all work both to mod and launch the game)
 
 6. Then for "Mod Folder", browse to the mod folder you downloaded and unzipped in step 3.
 
