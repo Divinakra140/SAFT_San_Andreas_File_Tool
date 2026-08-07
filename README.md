@@ -157,7 +157,7 @@ directory if you know how to do that. SAFT only knows how to replace files alrea
     option, whereas gamers and mod-users will usually want to use the fourth faster option. If you are a
     mod dev and want to modify the audio, make sure to click the option under extraction to "extract
     audio files as well". This is unselected by default because it takes forever to extract the whole
-    game including audio. If you are A casual gamer, just make sure your mod folder has audio in a
+    game including audio. If you are a casual gamer, just make sure your mod folder has audio in a
     nested folder structure and not just loose .wav and .ogg files, as audio is the only file that needs
     nested folders to be id'd by SAFT.
 
@@ -169,7 +169,7 @@ All mod files must be named identically to the games files for SAFT to replace t
 
 SAFT only accepts the native GTA SA file types, no .DAE for models, no mp3 for audio... ect..
 
-1. For Models: .dff files are accepted (use DragonDFF plugin for blender)
+1. For Models: .dff   (use DragonDFF plugin for blender)
 2. For Collision: .col
 3. For Textures: .txd
 4. For Animations: .ifp
@@ -204,13 +204,13 @@ Larger .wav or .ogg file size than the vanilla file you are replacing.
 
 ### Running SAFT
 
-Tested and verified to work on Winlator Official 11.1 Final by Brunodev.
+Tested and verified to work on [Winlator Official 11.1 Final by Brunodev]((https://github.com/brunodev85/winlator/releases/tag/v11.1.0).
 
-Tested and verified to work on Winlator Bionic Vanilla 3.1 Hotfix by StevenMXZ.
+Tested and verified to work on [Winlator Bionic Vanilla 3.1 Hotfix by StevenMXZ](https://github.com/StevenMXZ/Winlator-Ludashi/releases/tag/v3.1.h).
 
 - **Box64 preset:** Stability
 - **Startup Selection:** Any, even Aggressive works.
-- **Wine Version:** Winlator Official 11.1 — default wine settings.
+- **Wine Version:** default wine settings on official winlator. for stevenmxz, see line directly below.
 - **Wine Version (Bionic):** Proton-9.0-x86_64-0 (this is box, not fex).
 - **DXVK Version:** 2.3.1 worked in Bionic and 2.4.1 worked in Official (default for both).
 - **GPU driver:** default for both; newest mxz turnip 26.2.0 R7-Oneui was also used and worked.
@@ -223,7 +223,7 @@ Tested and verified to work on Winlator Bionic Vanilla 3.1 Hotfix by StevenMXZ.
 Tested and verified to work with the most competitive speeds and quality on 5 different apps — to make
 this simple, only the best one is included here.
 
-**Winlator Star 11-2 Stable Build by Jacojayy** (1080p at stable 60FPS, full range: 50-100FPS).
+**[Winlator Star 11-2 Stable Build by Jacojayy](https://github.com/winhub-emu/winhub/releases/tag/star.11-2)** (1080p at stable 60FPS, full range: 50-100FPS).
 
 - **Box64 Preset:** Performance
 - **Startup Selection:** Aggressive
