@@ -89,7 +89,7 @@ currently in your extracted folder. The extracted folder is bigger than the game
 extract if you have some free space available. SAFT will warn you about storage requirements.
 SAFT will not extract the audio archives by default becuase of how much more storage and time it
 takes to extract all the audio files, so if you are an audio mod dev, you can choose to also extract
-the aduio with the "Extract Audio As well?" check box.
+the audio with the "Extract Audio As well?" check box.
 
 Most people who are not mod developers and are mod users and gamers will want to use the fourth option
 from the right called "Install Mod(s) without Extraction" then leave the first bullet selected:
@@ -275,7 +275,7 @@ How SAFT works
 GTA San Andreas (PC) ships its models, textures, collision, animations, 
 cutscenes, and minigame scripts inside VER2-format .img archives — a
 directory table followed by sector-aligned (2048-byte), UNCOMPRESSED
-concatenated files. The app has four tabs:
+concatenated files. The app has five tabs:
 
 1. Extract Game Files — recursively finds every .img file under the chosen
    install folder (verifying the VER2 magic before treating it as an
@@ -340,6 +340,15 @@ concatenated files. The app has four tabs:
    just that one archive, and you're asked to confirm before that happens.
    Backs up each original entry's content to a folder you choose before
    touching it, unless you explicitly opt out (with a warning).
+
+5. Uninstall Mod(s) - Is a clone of tab 4; works the same way as 
+   "Install Mod(s) without extraction" but is worded differently
+    to direct the user to install their backed up vanilla files 
+    in place of any unpreffered mod files. This, in essence 
+    "uninstalls" any mods the user no longer wants in their 
+    game directory. This option is useless for anyone who installed
+    a mod without backups, which is why back ups are not only 
+    reccomended but enabled by default. 
 
 Filesystem/mod-package clutter that isn't a real game asset (.DS_Store,
 Thumbs.db, desktop.ini, macOS "._*" AppleDouble sidecars, and any ".txt"
