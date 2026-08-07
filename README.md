@@ -100,7 +100,7 @@ bit longer. Thats because SAFT is not only replacing a file, its gotta make room
 and rebuild the archive around it. The "archive" its referring to is the "gta3.img" or "player.img" 
 that all the individual game files and assets are contained within.
 
-SAFT also is a windows exe that is designed to also run in certain windows PC emulators. The two that
+SAFT is a windows exe that is designed to also run in certain windows PC emulators. The two that
 are currently known to work are Winlator Official and Winlator Bionic Vanilla/Ludashi by StevenMXZ. For
 more detailed settings for those emulators that work see the "Emulator Settings" section of this Readme.
 
