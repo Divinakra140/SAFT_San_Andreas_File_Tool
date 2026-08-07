@@ -101,7 +101,7 @@ and rebuild the archive around it. The "archive" its referring to is the "gta3.i
 that all the individual game files and assets are contained within.
 
 SAFT is a windows exe that is designed to also run in certain windows PC emulators. The two that
-are currently known to work are Winlator Official and Winlator Bionic Vanilla/Ludashi by StevenMXZ. For
+are currently known to work are [Winlator Official](https://github.com/brunodev85/winlator/releases/tag/v11.1.0) and [Winlator Bionic Vanilla](https://github.com/StevenMXZ/Winlator-Ludashi/releases/tag/v3.1.h). For
 more detailed settings for those emulators that work see the "Emulator Settings" section of this Readme.
 
 Note* SAFT works with mods that use Cleo to load their assets, as long as the assets are named the same
