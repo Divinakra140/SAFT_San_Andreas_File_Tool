@@ -1,11 +1,12 @@
 <img width="1157" height="215" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/IMG_8618.PNG" />
 
-*Developed by Divinakra, August 2026*
+													*Developed by Divinakra, August 2026*
 
 - SAFT is a portable 32-bit Windows tool compatible with any build or version of the PC game: GTA San
-  Andreas, only the originals v1-v3, not the Definitive Edition. It also runs well in certain PC
-  emulators on Android — to be clear, that means it modifies the original PC game running inside an
-  emulated Windows container on Android, not the Android port of GTA SA itself.
+  Andreas, only the originals v1-v3, not the Definitive Edition.
+- SAFT also runs well in certain PC emulators on Android — to be clear, that means it modifies the 
+  original PC game running inside an emulated Windows container on Android, not the Android port of 
+  GTA SA itself.
 - SAFT contains no assets, and only allows for users to modify their own GTA SA Game with their own mods.
 - SAFT is a file extractor, identifier and replacer; it knows where every modified file goes, based on name.
 
