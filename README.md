@@ -69,13 +69,13 @@ And as long as they are named correctly.
 
 This tool does not contain any games or mods, it's just a file replacer, as long as you bring your own
 GTA San Andreas PC game, and some mods, this tool can do all the work of replacing the game's vanilla
-files with your modded files. SAFT knows the file structure of whole San Andreas PC Game very well, and
-as long as your mod files are named exactly the same as the vanilla game files they aim to replace,
-SAFT will scan your whole mod folder, and pick all the replaceable files and will replace them in your
-game directory. There are options built into SAFT that will automatically back up your vanilla files,
-to anywhere you tell it to, so maybe make a folder called "vanilla" and tell it to back everything up
-there before you modify some files that you regret later. That way if you don't want the mods anymore,
-you can just use SAFT to replace the modded files back with the vanilla files using the same tool.
+files with your modded files. SAFT scans your whole San Andreas PC Game directory and as long as your 
+mod files are named exactly the same as the vanilla game files they aim to replace, SAFT will scan your
+whole mod folder, and pick all the replaceable files and will replace them in your game directory. There 
+are options built into SAFT that will automatically back up your vanilla files, to anywhere you tell it
+to, so maybe make a folder called "backups" and tell it to back everything up there before you modify 
+some files that you regret later. That way if you don't want the mods anymore,you can just use SAFT to
+replace the modded files back with the vanilla files using the same tool.
 
 SAFT also has an extraction tool built into it, and can extract your whole GTA San Andreas Game into
 an organized folder structure with all the individually named vanilla game files for you to manually
