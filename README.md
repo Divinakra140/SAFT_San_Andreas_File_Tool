@@ -221,7 +221,7 @@ game folder — SAFT can replace all of them.
 | Type | Why not |
 |---|---|
 | `.exe` | The game executable itself. SAFT replaces game assets, not the game. |
-| `.dll` / `.asi` | Libraries and plugins — that's modloader/CLEO territory but SAFT may modify these in the future. |
+| `.dll` / `.asi` | Libraries and plugins — that's modloader/CLEO territory, but SAFT may modify these in the future. |
 | `.img` | Whole archives. SAFT works *inside* these; swapping one wholesale would bypass everything it does. |
 | `.scm` | Game scripts — `data/script/main.scm` and the scripts inside `script.img`. See below. |
 

@@ -58,7 +58,7 @@ replaced - this is what makes uninstalling possible later, so it is not optional
 
 9. Answer the windows SAFT shows you. It will say how heavy the mod is (green/amber/red, below), it
 will ask before rebuilding an archive to fit bigger files, and if your mod contains files the game
-does not already have it will ask whether you meant to ADD them or misnamed a replacement. Nothing is
+does not already have, it will ask whether you meant to ADD them or misnamed a replacement. Nothing is
 written until you have answered. Then you're done - launch the game normally.
 
 10. To uninstall, use the "Uninstall Mods" tab and point it at the backup folder you used when you
