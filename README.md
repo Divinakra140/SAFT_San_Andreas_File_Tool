@@ -149,7 +149,7 @@ directory if you know how to do that. SAFT only knows how to replace files alrea
 
 9. Answer the windows SAFT shows you. It will say how heavy the mod is (green/amber/red, below), it
    will ask before rebuilding an archive to fit bigger files, and if your mod contains files the game
-   doesn't already have it will ask whether you meant to **add** them or misnamed a replacement.
+   doesn't already have, it will ask whether you meant to **add** them or misnamed a replacement.
    Nothing is written until you've answered. Then you're done — launch the game normally.
    
 10. To uninstall, use the **Uninstall Mods** tab and point it at the backup folder you used when you
@@ -221,7 +221,7 @@ game folder — SAFT can replace all of them.
 | Type | Why not |
 |---|---|
 | `.exe` | The game executable itself. SAFT replaces game assets, not the game. |
-| `.dll` / `.asi` | Libraries and plugins — that's modloader/CLEO territory, which SAFT exists to avoid. |
+| `.dll` / `.asi` | Libraries and plugins — that's modloader/CLEO territory but SAFT may modify these in the future. |
 | `.img` | Whole archives. SAFT works *inside* these; swapping one wholesale would bypass everything it does. |
 | `.scm` | Game scripts — `data/script/main.scm` and the scripts inside `script.img`. See below. |
 
@@ -230,6 +230,7 @@ other file it touches is self-contained — put the original back and the change
 not. Saves are written against the script's global variable layout and store references to the
 scripts inside `script.img` *by position*, so replacing one can leave an existing save pointing at
 code that no longer matches. Saves live outside your game folder, so no backup SAFT makes undoes that.
+This protects the user from corrupting their save files.
 
 So SAFT refuses, and tells you when your mod folder contains one. If you still want it, `main.scm`
 is a single unarchived file at `data > script > main.scm` — drag your modded copy over it yourself.
@@ -253,7 +254,7 @@ For Music: the folder structure is (for example):
 `Audio > Streams > AA > Track_001.ogg`
 
 NOTE* music and SFX cannot be any bigger than the vanilla song or SFX file size. Only same or smaller is
-Accepted by SAFT and by GTA SA and your audio file will remain vanilla if attempting to replace with a
+accepted by SAFT and by GTA SA and your audio file will remain vanilla if attempting to replace with a
 Larger .wav or .ogg file size than the vanilla file you are replacing.
 
 ---
