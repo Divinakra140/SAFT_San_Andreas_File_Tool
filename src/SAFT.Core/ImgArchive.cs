@@ -129,10 +129,19 @@ public sealed class ImgArchive : IDisposable
     /// file, since posting tens of thousands of cross-thread UI updates in a tight loop can
     /// overwhelm the receiving thread faster than it can keep up.
     /// </summary>
+    /// <summary>
+    /// <paramref name="onFileMeasured"/> reports the sizing pass that runs before any bytes are
+    /// written. It looks like it should be instant, but it opens every file in the archive — 16,000+
+    /// for gta3.img — and on Windows each open goes through the virus scanner one at a time, which
+    /// took minutes on a real install with the UI sitting on the previous stage's finished count.
+    /// Silence there is indistinguishable from a hang, so it gets its own progress like every other
+    /// stage that takes real time.
+    /// </summary>
     public static void Write(
         string destinationPath,
         IReadOnlyList<(string Name, Func<Stream> OpenContent)> files,
-        Action<int, int>? onFileWritten = null)
+        Action<int, int>? onFileWritten = null,
+        Action<int, int>? onFileMeasured = null)
     {
         foreach (var f in files)
         {
@@ -163,6 +172,10 @@ public sealed class ImgArchive : IDisposable
             offsets[i] = cursor;
             sizes[i] = (ushort)sectorCount;
             cursor += sectorCount;
+
+            var measured = i + 1;
+            if (onFileMeasured is not null && (measured == files.Count || measured % 25 == 0))
+                onFileMeasured(measured, files.Count);
         }
 
         for (var i = 0; i < files.Count; i++)

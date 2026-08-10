@@ -378,6 +378,12 @@ public static class DirectModInstaller
     public static DirectInstallResult Apply(
         DirectInstallPlan plan, string? backupOutputFolder, IProgress<DirectInstallProgress>? progress = null)
     {
+        // Throttled at the door, so every progress?.Report below it - including the ones passed
+        // down into the private helpers - costs a UI round trip ten times a second rather than
+        // once per file. See ThrottledProgress: per-file reporting is what made a full extraction
+        // take hours under Winlator.
+        progress = new ThrottledProgress<DirectInstallProgress>(progress);
+
         var summaries = new List<DirectInstallSummary>();
         var byArchive = plan.Matches.GroupBy(m => m.ArchiveRelativePath).ToList();
         var audioToApply = plan.AudioMatchesThatFit;
@@ -495,9 +501,10 @@ public static class DirectModInstaller
                 var backedUp = false;
                 if (backupOutputFolder is not null)
                 {
+                    // Still counts as backed up when one is already there — that earlier copy is the
+                    // vanilla file, which is exactly what a restore wants.
                     var backupPath = Path.Combine(backupOutputFolder, match.RelativePath);
-                    Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
-                    File.Copy(match.AbsolutePath, backupPath, overwrite: true);
+                    if (NeedsBackup(backupPath)) File.Copy(match.AbsolutePath, backupPath);
                     backedUp = true;
                 }
 
@@ -522,16 +529,32 @@ public static class DirectModInstaller
             summaries, audioSummaries, streamSummaries, audioFailed, streamFailed, unarchivedSummaries, unarchivedFailed);
     }
 
+    /// <summary>
+    /// True when a backup still needs writing at this path.
+    ///
+    /// A backup is never overwritten. Installing a second mod into the same backup folder — or the
+    /// same mod twice — reaches this point with the game file already modded, so writing again would
+    /// replace the vanilla copy with a modded one and quietly destroy the only way back. The first
+    /// copy is always the closest thing to stock, so it wins; every later attempt is skipped.
+    /// </summary>
+    private static bool NeedsBackup(string destPath)
+    {
+        if (File.Exists(destPath)) return false;
+        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+        return true;
+    }
+
     private static void BackupAudioOriginal(DirectAudioMatch match, string backupOutputFolder)
     {
+        var destPath = Path.Combine(backupOutputFolder, "audio", "sfx", match.MatchKey.Replace('/', Path.DirectorySeparatorChar));
+        if (!NeedsBackup(destPath)) return;
+
         using var stream = File.OpenRead(match.PackageAbsolutePath);
         var bank = SfxBank.Read(stream, match.BankHeaderOffset, match.BankLength);
         stream.Position = bank.GetPcmOffset(match.SoundIndex);
         var pcm = new byte[bank.GetPcmLength(match.SoundIndex)];
         stream.ReadExactly(pcm);
 
-        var destPath = Path.Combine(backupOutputFolder, "audio", "sfx", match.MatchKey.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
         using var outFile = File.Create(destPath);
         WavPcm.WriteMono16Wav(outFile, pcm, bank.Sounds[match.SoundIndex].SampleRate);
     }
@@ -541,6 +564,9 @@ public static class DirectModInstaller
 
     private static void BackupStreamOriginal(DirectStreamMatch match, string backupOutputFolder)
     {
+        var destPath = Path.Combine(backupOutputFolder, "audio", "streams", match.MatchKey.Replace('/', Path.DirectorySeparatorChar));
+        if (!NeedsBackup(destPath)) return;
+
         using var stream = File.OpenRead(match.StationAbsolutePath);
         var payloadOffset = match.HeaderOffset + StreamIndex.TrackHeaderSize;
         stream.Position = payloadOffset;
@@ -548,8 +574,6 @@ public static class DirectModInstaller
         stream.ReadExactly(encrypted);
         var decrypted = StreamXor.Transform(encrypted, payloadOffset);
 
-        var destPath = Path.Combine(backupOutputFolder, "audio", "streams", match.MatchKey.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
         File.WriteAllBytes(destPath, decrypted);
     }
 
@@ -565,12 +589,14 @@ public static class DirectModInstaller
         {
             var entry = archive.Entries.First(e => e.Name.Equals(matches[i].EntryName, StringComparison.OrdinalIgnoreCase));
             var bucket = ImgEntry.GetBucketFolderName(entry.Name);
-            var destDir = Path.Combine(backupOutputFolder, archiveRelativePath, bucket);
-            Directory.CreateDirectory(destDir);
+            var destPath = Path.Combine(backupOutputFolder, archiveRelativePath, bucket, entry.Name);
 
-            using (var src = archive.OpenEntry(entry))
-            using (var dst = new FileStream(Path.Combine(destDir, entry.Name), FileMode.Create, FileAccess.Write, FileShare.None))
+            if (NeedsBackup(destPath))
+            {
+                using var src = archive.OpenEntry(entry);
+                using var dst = new FileStream(destPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
                 src.CopyTo(dst);
+            }
 
             onProgress?.Invoke(i + 1, matches.Count);
         }
@@ -583,30 +609,63 @@ public static class DirectModInstaller
     /// </summary>
     private static void PatchArchiveInPlace(string archiveAbsolutePath, IReadOnlyList<DirectInstallMatch> matches, Action<int, int>? onProgress)
     {
-        List<(ImgEntry Entry, string ModFilePath)> targets;
+        // The directory INDEX is carried along, not just the entry: a replacement that is smaller
+        // than what it replaces has to shrink that entry's size field, and the field's position in
+        // the file is derived from the index.
+        List<(int Index, ImgEntry Entry, string ModFilePath)> targets;
         using (var archive = ImgArchive.Open(archiveAbsolutePath))
         {
             targets = matches
-                .Select(m => (
-                    Entry: archive.Entries.First(e => e.Name.Equals(m.EntryName, StringComparison.OrdinalIgnoreCase)),
-                    m.ModFilePath))
+                .Select(m =>
+                {
+                    var index = -1;
+                    for (var i = 0; i < archive.Entries.Count; i++)
+                    {
+                        if (!archive.Entries[i].Name.Equals(m.EntryName, StringComparison.OrdinalIgnoreCase)) continue;
+                        index = i;
+                        break;
+                    }
+                    return (Index: index, Entry: archive.Entries[index], m.ModFilePath);
+                })
                 .ToList();
         } // read handle must close before we reopen the same path for writing
 
         using var writeStream = new FileStream(archiveAbsolutePath, FileMode.Open, FileAccess.Write, FileShare.Read);
         for (var i = 0; i < targets.Count; i++)
         {
-            var (entry, modFilePath) = targets[i];
+            var (index, entry, modFilePath) = targets[i];
+            var length = new FileInfo(modFilePath).Length;
+
             writeStream.Position = entry.ByteOffset;
             using (var content = File.OpenRead(modFilePath))
                 content.CopyTo(writeStream);
 
-            var remaining = entry.ByteSize - new FileInfo(modFilePath).Length;
+            var remaining = entry.ByteSize - length;
             if (remaining > 0)
                 writeStream.Write(new byte[remaining]);
 
+            // The size field is what the game streams by, so leaving it at the old value makes a
+            // smaller replacement cost exactly what the bigger file it replaced did. That is not a
+            // theoretical concern: a texture pack meant to lighten an area by a third was installed
+            // correctly, byte for byte, and changed nothing in game, because this field still said
+            // 28.8 MB for a 10.4 MB dictionary. It also feeds SAFT's own weighing, so every
+            // measurement taken afterwards inherited the stale number too.
+            var newSectors = (ushort)((length + ImgEntry.SectorSize - 1) / ImgEntry.SectorSize);
+            if (newSectors != entry.SizeSectors)
+            {
+                writeStream.Position = ImgArchive.HeaderSize + (long)index * ImgArchive.DirEntrySize + sizeof(uint);
+                writeStream.Write(BitConverter.GetBytes(newSectors));
+            }
+
             onProgress?.Invoke(i + 1, targets.Count);
         }
+
+        // Committed to the device before the handle closes, rather than left as dirty pages for the
+        // OS to write back whenever it feels like it. The game is a separate process that may open
+        // this archive seconds later, and on a phone writing to an SD card that write-back can still
+        // be in flight — which looks exactly like the game hanging on its first launch after an
+        // install and then being perfectly fine on the second.
+        writeStream.Flush(flushToDisk: true);
     }
 
     /// <summary>

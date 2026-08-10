@@ -113,6 +113,26 @@ public static class Extractor
         var totalGroups = archives.Count + 1 + (includeAudio ? 1 : 0);
         var manifestArchives = new List<ManifestArchive>();
 
+        // Extraction is over twenty thousand files, and reporting every one of them is what made
+        // this take hours under Winlator rather than minutes. See ThrottledProgress.
+        var report = new ThrottledProgress<ExtractionProgress>(progress);
+
+        // A .dff bucket is created once, not once per .dff. There are only a handful of distinct
+        // buckets per archive, but the old code asked the filesystem to create one for every single
+        // entry - 16,316 redundant calls for gta3.img alone, each a real syscall through Wine and
+        // then through Android's storage layer.
+        var bucketsMade = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // One buffer for the whole extraction, not one per file.
+        //
+        // Stream.CopyTo allocates a fresh 81,920-byte array every time it is called. Over 21,058
+        // archive entries that is 1.7 GB of allocation churned through a 32-BIT process, whose entire
+        // address space is 2 GB. The garbage collector can keep up with the volume, but the
+        // fragmentation it leaves behind cannot be collected away, and the failure mode of a
+        // fragmented small address space is exactly what was reported: steadily slower, then a
+        // process that vanishes without an exception partway through.
+        var copyBuffer = new byte[81920];
+
         // ---- archives: unpack each into destination/<relative path>/<extension>/<filename> ----
         for (var i = 0; i < archives.Count; i++)
         {
@@ -128,17 +148,28 @@ public static class Extractor
             foreach (var entry in archive.Entries)
             {
                 var bucketDir = Path.Combine(archiveDestRoot, entry.Extension);
-                Directory.CreateDirectory(bucketDir);
+                if (bucketsMade.Add(bucketDir)) Directory.CreateDirectory(bucketDir);
 
                 var outPath = Path.Combine(bucketDir, entry.Name);
                 using (var src = archive.OpenEntry(entry))
-                using (var dst = new FileStream(outPath, FileMode.Create, FileAccess.Write, FileShare.None))
-                    src.CopyTo(dst);
+                // bufferSize 0 turns off FileStream's own internal buffer: it would be a second
+                // per-file array serving no purpose, since everything below writes in 80 KB blocks
+                // that are already far larger than it.
+                using (var dst = new FileStream(outPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 0))
+                {
+                    int read;
+                    while ((read = src.Read(copyBuffer, 0, copyBuffer.Length)) > 0)
+                        dst.Write(copyBuffer, 0, read);
+                }
 
                 entryOrder.Add(entry.Name);
                 filesDone++;
-                progress?.Report(new ExtractionProgress(found.RelativePath, i + 1, totalGroups, filesDone, archive.Entries.Count));
+                report.Report(new ExtractionProgress(found.RelativePath, i + 1, totalGroups, filesDone, archive.Entries.Count));
             }
+
+            // Not throttled: the bar has to actually finish this archive rather than stop wherever
+            // the last tick happened to land.
+            report.ReportNow(new ExtractionProgress(found.RelativePath, i + 1, totalGroups, filesDone, archive.Entries.Count));
 
             manifestArchives.Add(new ManifestArchive { RelativePath = found.RelativePath, OriginalEntryOrder = entryOrder });
         }
@@ -153,11 +184,14 @@ public static class Extractor
             var source = looseFiles[i];
             var relative = Path.GetRelativePath(gameRoot, source);
             var dest = Path.Combine(destination, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            var destDir = Path.GetDirectoryName(dest)!;
+            if (bucketsMade.Add(destDir)) Directory.CreateDirectory(destDir);
             File.Copy(source, dest, overwrite: true);
 
-            progress?.Report(new ExtractionProgress("Copying game files", archives.Count + 1, totalGroups, i + 1, Math.Max(1, looseFiles.Count)));
+            report.Report(new ExtractionProgress("Copying game files", archives.Count + 1, totalGroups, i + 1, Math.Max(1, looseFiles.Count)));
         }
+
+        report.ReportNow(new ExtractionProgress("Copying game files", archives.Count + 1, totalGroups, looseFiles.Count, Math.Max(1, looseFiles.Count)));
 
         // ---- optional: unpack SFX banks and streamed tracks into individual files ----
         var unpackedAudioPackages = new List<string>();
@@ -192,7 +226,7 @@ public static class Extractor
                         WavPcm.WriteMono16Wav(outFile, pcm, bank.Sounds[soundIdx].SampleRate);
 
                         audioDone++;
-                        progress?.Report(new ExtractionProgress($"audio/sfx/{pkg.Name}", audioGroupIndex, totalGroups, audioDone, audioTotal));
+                        report.Report(new ExtractionProgress($"audio/sfx/{pkg.Name}", audioGroupIndex, totalGroups, audioDone, audioTotal));
                     }
                 }
                 unpackedAudioPackages.Add(pkg.Name);
@@ -219,11 +253,13 @@ public static class Extractor
                         File.WriteAllBytes(destPath, decrypted);
 
                         audioDone++;
-                        progress?.Report(new ExtractionProgress($"audio/streams/{station.Name}", audioGroupIndex, totalGroups, audioDone, audioTotal));
+                        report.Report(new ExtractionProgress($"audio/streams/{station.Name}", audioGroupIndex, totalGroups, audioDone, audioTotal));
                     }
                 }
                 unpackedStreamStations.Add(station.Name);
             }
+
+            report.ReportNow(new ExtractionProgress("audio", audioGroupIndex, totalGroups, audioTotal, Math.Max(1, audioTotal)));
         }
 
         var manifest = new SaftManifest

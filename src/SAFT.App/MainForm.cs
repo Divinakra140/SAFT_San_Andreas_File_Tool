@@ -12,6 +12,10 @@ public partial class MainForm : Form
     private Button ExtractButton = null!;
     private Label ScanSummaryText = null!;
     private Label ExtractWarningText = null!;
+    private Label ExtractSlowWarningText = null!;
+
+    /// <summary>Destination the size popup has already been shown for, so it appears once per choice rather than on every recalculation.</summary>
+    private string? _warnedAboutExtractionSize;
     private Label ExtractSubProgressText = null!;
     private ProgressBar ExtractSubProgressBar = null!;
     private ProgressBar ExtractProgressBar = null!;
@@ -29,11 +33,9 @@ public partial class MainForm : Form
     private Label ManifestSummaryText = null!;
     private RadioButton NewFolderOption = null!;
     private RadioButton InPlaceWithBackupOption = null!;
-    private RadioButton InPlaceNoBackupOption = null!;
     private Panel RebuildDestRow = null!;
     private TextBox RebuildDestBox = null!;
     private Label InPlaceWarningText = null!;
-    private Label NoBackupWarningText = null!;
     private Button RebuildButton = null!;
     private Label RebuildSubProgressText = null!;
     private ProgressBar RebuildSubProgressBar = null!;
@@ -42,11 +44,9 @@ public partial class MainForm : Form
     // ---- Tab 4: Install without extraction ----
     private TextBox DirectGameFolderBox = null!;
     private TextBox DirectModFolderBox = null!;
-    private RadioButton DirectBackupOption = null!;
-    private RadioButton DirectNoBackupOption = null!;
     private Panel DirectBackupDestRow = null!;
     private TextBox DirectBackupDestBox = null!;
-    private Label DirectNoBackupWarningText = null!;
+    private Label DirectBackupNoticeText = null!;
     private Button DirectInstallButton = null!;
     private Label DirectSubProgressText = null!;
     private ProgressBar DirectSubProgressBar = null!;
@@ -97,10 +97,101 @@ public partial class MainForm : Form
 
     private static string FormatSize(long bytes) => $"{bytes / 1073741824.0:0.0}GB";
 
+    /// <summary>
+    /// Reports a caught failure with enough detail to act on.
+    ///
+    /// "Install failed: Object reference not set to an instance of an object" names a category of
+    /// bug and nothing else - not the file, not the line, not the call that got there. The type and
+    /// the stack are what identify it, so both go on screen AND into the log file beside the exe,
+    /// which is the copy that can be sent on.
+    /// </summary>
+    private static void ReportFailure(Exception ex, string what)
+    {
+        var logPath = Path.Combine(Program.ExeFolder, "saft-crash-log.txt");
+        var written = false;
+        try
+        {
+            File.AppendAllText(logPath,
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {what} failed{Environment.NewLine}{ex}" +
+                $"{Environment.NewLine}{new string('-', 78)}{Environment.NewLine}");
+            written = true;
+        }
+        catch
+        {
+            // Read-only media or no space; the dialog below still carries the detail.
+        }
+
+        // The first few frames are the useful part; the whole trace would not fit on a 544px screen.
+        var frames = (ex.StackTrace ?? "").Split('\n').Take(4).Select(l => l.Trim());
+
+        MessageBox.Show(
+            $"{what} failed.{Environment.NewLine}{Environment.NewLine}" +
+            $"{ex.GetType().Name}: {ex.Message}{Environment.NewLine}{Environment.NewLine}" +
+            string.Join(Environment.NewLine, frames) +
+            (written ? $"{Environment.NewLine}{Environment.NewLine}Full details written to {logPath}" : ""),
+            "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+
+    /// <summary>
+    /// The reason part of a skip message, with the specific file dropped, so that twelve lines
+    /// differing only in a filename collapse into one line with a count.
+    /// </summary>
+    private static string SkipReason(string skipped)
+    {
+        var colon = skipped.IndexOf(": ", StringComparison.Ordinal);
+        return colon > 0 ? skipped[(colon + 2)..] : skipped;
+    }
+
+    /// <summary>
+    /// Puts a chosen game folder into every tab that asks for one.
+    ///
+    /// It's the same folder in all of them — the user has one San Andreas install, and picking it
+    /// again on each tab is pure friction. Each box stays editable, so switching to a different
+    /// install is still just a Browse away; that choice then propagates in turn.
+    /// </summary>
+    private void ShareGameFolder(string folder)
+    {
+        foreach (var box in new[] { GameFolderBox, DirectGameFolderBox, UninstallGameFolderBox })
+        {
+            if (box is not null) box.Text = folder;
+        }
+
+        // The other tabs' buttons enable on their own criteria, and one of those has just been met.
+        UpdateDirectInstallButtonEnabled();
+        UpdateUninstallButtonEnabled();
+    }
+
+    /// <summary>
+    /// Where the last folder was picked from, so the next browse starts there instead of at the root
+    /// of the device.
+    ///
+    /// The folders SAFT asks for are almost always neighbours — a game folder, a mod folder and a
+    /// backup folder usually sit within a directory or two of each other — so following the user
+    /// around beats anchoring to any one of them. Remembering the GAME folder specifically would
+    /// help the second pick and then be wrong for the rest.
+    ///
+    /// Deliberately not written to disk: SAFT is a portable exe that may be running from read-only
+    /// media, and a settings file is a bigger promise than this feature is worth.
+    /// </summary>
+    private static string? _lastBrowsedFolder;
+
     private static string? BrowseForFolder(string description)
     {
         using var dialog = new FolderBrowserDialog { Description = description, UseDescriptionForTitle = true };
-        return dialog.ShowDialog() == DialogResult.OK ? dialog.SelectedPath : null;
+
+        // The parent, not the folder itself: opening inside the folder you last chose means climbing
+        // out again to reach its neighbour, which is the common case.
+        if (_lastBrowsedFolder is { } previous && Directory.Exists(previous))
+        {
+            var parent = Path.GetDirectoryName(previous.TrimEnd(Path.DirectorySeparatorChar));
+            dialog.InitialDirectory = Directory.Exists(parent) ? parent : previous;
+            dialog.SelectedPath = previous;
+        }
+
+        if (dialog.ShowDialog() != DialogResult.OK) return null;
+
+        _lastBrowsedFolder = dialog.SelectedPath;
+        return dialog.SelectedPath;
     }
 
     /// <summary>
@@ -143,6 +234,292 @@ public partial class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// Every file name the game already has, archived or loose. Answering "does this already exist"
+    /// is what separates a replacement from an addition.
+    /// </summary>
+    private static HashSet<string> GameFileNames(string gameRoot)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var found in GameScanner.FindArchives(gameRoot))
+        {
+            try
+            {
+                using var archive = ImgArchive.Open(found.AbsolutePath);
+                foreach (var entry in archive.Entries) names.Add(entry.Name);
+            }
+            catch
+            {
+                // An unreadable archive just means those names look "new"; the addition popups then
+                // ask rather than acting, which is the safe direction.
+            }
+        }
+
+        foreach (var group in UnarchivedIndex.Build(gameRoot)) names.Add(group.Key);
+        return names;
+    }
+
+    /// <summary>The size of each file this mod would replace, keyed by name, for the streaming comparison.</summary>
+    private static Dictionary<string, long> ReplacementSizes(DirectInstallPlan plan)
+    {
+        var sizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var match in plan.Matches)
+        {
+            try { sizes[match.FileName] = new FileInfo(match.ModFilePath).Length; } catch { }
+        }
+        foreach (var match in plan.UnarchivedMatches)
+        {
+            try { sizes[match.FileName] = new FileInfo(match.ModFilePath).Length; } catch { }
+        }
+
+        return sizes;
+    }
+
+    /// <summary>
+    /// Shows what a mod does to the game's streaming load, and asks permission when it goes beyond
+    /// what the player's own game demonstrably handles. Returns false only if the user chooses to
+    /// stop. Within-range mods just get an acknowledgement, never a decision.
+    /// </summary>
+    private bool ConfirmStreamingImpact(StreamingVerdict verdict)
+    {
+        if (!verdict.NeedsConfirmation)
+        {
+            var ok = ConfirmDialog.Acknowledgement(verdict.Message, "OK", verdict.Severity);
+            ok.ShowDialog(this);
+            return true;
+        }
+
+        var confirm = new ConfirmDialog(
+            verdict.Message,
+            "Continue",
+            "Don't install",
+            verdict.Severity);
+        confirm.ShowDialog(this);
+        return confirm.Result;
+    }
+
+    /// <summary>
+    /// Asks whether to install a mod's new objects. There is deliberately no "add without logging"
+    /// option: nobody should end up with additions they can't cleanly uninstall.
+    /// </summary>
+    private bool ConfirmAdditions(AdditionPlan additions)
+    {
+        var slotsAfter = additions.SlotsAvailable - additions.SlotsRequired;
+        var confirm = new ConfirmDialog(
+            $"Your mod folder contains {additions.SlotsRequired} new object(s) that are not in your game " +
+            $"directory. These would take up {additions.SlotsRequired} of your game's object slots. SAFT can " +
+            $"add them because there are currently {additions.SlotsAvailable} available and compatible slots.\n\n" +
+            "Would you like SAFT to add them, and write backup-logs of how they were added, so you can " +
+            $"cleanly uninstall them later? This would leave you with {slotsAfter} empty slots.",
+            "Yes, add new assets",
+            "No, replacements only");
+        confirm.ShowDialog(this);
+
+        if (!confirm.Result) return false;
+
+        MessageBox.Show(
+            "Adding new assets…\n\n" +
+            "Please note that any assets added through other tools or methods will not be uninstallable " +
+            "through SAFT. But if SAFT added it in, SAFT can remove it later.",
+            "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        return true;
+    }
+
+    /// <summary>
+    /// The mod brought new assets but no .ide/.ipl, so the game would never show them — they would
+    /// take up object slots and appear nowhere. A guide listing the player's own free slots is
+    /// written next to the files they need to fix.
+    /// </summary>
+    /// <summary>
+    /// Asks whether files SAFT doesn't recognise are meant to be new, BEFORE any of the prompts that
+    /// help add them.
+    ///
+    /// A replacement only happens when the mod file has exactly the same name as the game file it
+    /// replaces. Someone who builds a new taxi and calls it mytaxi.dff has made a mod that replaces
+    /// nothing — and every prompt after this one would then cheerfully walk them through adding a
+    /// second, separate vehicle to the game, which reads as instructions rather than as a warning.
+    /// By the end they could have followed every step correctly and still not have the thing they set
+    /// out to make.
+    ///
+    /// So the question is asked once, plainly, at the top: did you mean to ADD these, or did you mean
+    /// to REPLACE something and get the names wrong? Everything downstream assumes the answer.
+    /// </summary>
+    private bool ConfirmAdditionsAreIntentional(DirectInstallPlan plan, AdditionPlan additions)
+    {
+        const int shown = 6;
+        var names = additions.NewAssets.Select(a => a.FileName).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+        var listed = string.Join(Environment.NewLine, names.Take(shown).Select(n => "    " + n));
+        if (names.Count > shown) listed += $"{Environment.NewLine}    ...and {names.Count - shown} more";
+
+        var replaced = plan.Matches.Count + plan.UnarchivedMatches.Count + plan.AudioMatches.Count + plan.StreamMatches.Count;
+
+        // A mod shipping .ide/.ipl has gone to the trouble of describing objects and where they go,
+        // which is a deliberate act rather than a slip. Worth saying so, instead of implying the
+        // author probably made a mistake.
+        var reading = additions.Definitions.Count > 0
+            ? "This mod also supplies .ide/.ipl map data for them, so it does look deliberate."
+            : "This mod supplies no .ide/.ipl map data for them, which is what a mod meant purely as a " +
+              "REPLACEMENT looks like.";
+
+        // Stop means stop. Nothing is installed, including the files that DID match — a half-applied
+        // mod is worse than none, because it looks finished. Saying so here matters more than it
+        // looks: the line that used to sit in this spot claimed the matched files would go in
+        // "whichever way you answer", which was not even true of the code, and would have left
+        // someone believing their mod was installed when the install had been cancelled.
+        var alsoMatched = replaced > 0
+            ? $"{Environment.NewLine}{Environment.NewLine}{replaced} other file(s) in this folder DO match " +
+              "your game. Continuing replaces those as normal and adds the ones above. Stopping installs " +
+              "nothing at all - not those either - so you never end up with half a mod in your game."
+            : "";
+
+        var confirm = new ConfirmDialog(
+            $"{names.Count} file(s) in this mod folder are not named the same as anything in your game:" +
+            $"{Environment.NewLine}{Environment.NewLine}{listed}{Environment.NewLine}{Environment.NewLine}" +
+
+            $"SAFT is going to assume these are assets you want to ADD to the game, that were never there " +
+            $"before, and walk you through doing that properly. {reading}{alsoMatched}" +
+            $"{Environment.NewLine}{Environment.NewLine}" +
+
+            // "a new taxi has to be called taxi.dff" was the first attempt, and "new" is the one word
+            // this sentence cannot afford - it is the word for the other thing, in a message whose
+            // entire job is telling the two apart.
+            "If this mod was only ever meant to REPLACE things, stop here. A file replaces a game file " +
+            "when it has exactly the same name as it: a taxi REPLACEMENT mod has to be called taxi.dff, " +
+            "not mytaxi.dff. Rename your files to match the ones they are meant to replace, then run " +
+            "this again. Nothing has been changed yet.",
+
+            "Yes, these are meant to be new additions",
+            "Stop, I need to rename these files",
+            StreamingSeverity.Caution);
+        confirm.ShowDialog(this);
+        return confirm.Result;
+    }
+
+    private bool ConfirmAdditionsWithoutPlacementData(string gameFolder, string modFolder, AdditionPlan additions)
+    {
+        var guide = AddingAssetsGuide.TryWrite(gameFolder, modFolder, additions.SlotsAvailable);
+
+        var whereToLook = guide.Written
+            ? $"{AddingAssetsGuide.FileName} has been put in your mod folder. It explains how to add objects " +
+              $"properly, and lists the {additions.SlotsAvailable} empty object slots in your game."
+            : $"SAFT could not write {AddingAssetsGuide.FileName} into your mod folder ({guide.Reason}). Your " +
+              $"game has {additions.SlotsAvailable} free object slots. See the Adding Assets guide on the " +
+              "SAFT releases page.";
+
+        var confirm = new ConfirmDialog(
+            "Your mod folder has new assets that aren't in your game, but no .ide and .ipl files to go with " +
+            "them (.ide says what an object is, .ipl says where it goes). Without those, SAFT can copy the " +
+            "files in but the game will never show them — they'd use up object slots and appear nowhere.\n\n" +
+            whereToLook,
+            "Install the rest",
+            "Stop, let me fix it");
+        confirm.ShowDialog(this);
+        return confirm.Result;
+    }
+
+    /// <summary>
+    /// The record of a previous install of this same mod folder, if the backup folder has one.
+    ///
+    /// Matching on the mod folder's name is enough here, because these are records SAFT itself wrote
+    /// for that same folder — it isn't being used to identify a mod in the wild.
+    /// </summary>
+    private static AddedMod? FindInstalledMod(string backupFolder, string modName)
+    {
+        if (string.IsNullOrWhiteSpace(backupFolder)) return null;
+
+        try
+        {
+            return AdditionsManifest.Load(backupFolder)?.Mods
+                .FirstOrDefault(m => m.Name.Equals(modName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            // An unreadable manifest just means we can't tell, and installing normally is no worse
+            // than today's behaviour.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Asks before reinstalling a mod that's already installed. The cost is worth naming: removing
+    /// the old copy means an extra rebuild of the archive, which is minutes rather than seconds.
+    /// </summary>
+    private bool ConfirmReinstall(AddedMod existing)
+    {
+        var slots = existing.ObjectIds.Count == 0
+            ? ""
+            : $" using object slot(s) {string.Join(", ", existing.ObjectIds.Take(8))}";
+
+        var confirm = new ConfirmDialog(
+            $"'{existing.Name}' is already installed - {existing.ObjectIds.Count} object(s){slots}, added on " +
+            $"{existing.AddedAtUtc.ToLocalTime():d MMMM yyyy}.\n\n" +
+            "SAFT can remove that copy and install this one fresh. That is how you update a mod to a " +
+            "newer version.\n\n" +
+            "Be warned this is slow. SAFT has to rebuild the whole game archive twice, once to take the " +
+            "old copy out and once to put the new one in, so expect it to take several minutes and to " +
+            "look frozen at times. The progress bar will keep moving.\n\n" +
+            "If this is a mistake and you don't want to update your currently installed mod, just press " +
+            "Leave it as it is.",
+            "Reinstall it",
+            "Leave it as it is",
+            StreamingSeverity.Caution);
+        confirm.ShowDialog(this);
+        return confirm.Result;
+    }
+
+    /// <summary>The mod needs more object slots than the game has left, so its new objects can't be installed.</summary>
+    private bool ConfirmAdditionsThatDoNotFit(AdditionPlan additions)
+    {
+        var confirm = new ConfirmDialog(
+            $"Your mod folder contains {additions.SlotsRequired} new object(s) that aren't in your game. SAFT " +
+            "can only add them if there are enough free object slots, and your game has " +
+            $"{additions.SlotsAvailable} left — so these additional assets will not be installed.\n\n" +
+            "Would you like to still install the other files in the mod folder?",
+            "Skip them, replacements only",
+            "Don't install");
+        confirm.ShowDialog(this);
+        return confirm.Result;
+    }
+
+    /// <summary>
+    /// Refuses to place objects the mod hasn't supplied collision for.
+    ///
+    /// This is a refusal rather than a warning because installing anyway produces a game that
+    /// crashes the moment a save is loaded — not a game with objects you can walk through. The
+    /// wording says what's missing, who can fix it and how, since the user usually can't: the .col
+    /// has to come from whoever built the mod.
+    /// </summary>
+    private bool ConfirmSkippingAdditionsWithoutCollision(string gameFolder, string modFolder, AdditionPlan additions)
+    {
+        // Same treatment as a mod arriving without .ide/.ipl: the user is missing a piece they can
+        // actually go and fix, so the guide goes into the mod folder next to the files it talks about.
+        var guide = AddingAssetsGuide.TryWrite(gameFolder, modFolder, additions.SlotsAvailable);
+
+        var names = additions.ModelsWithoutCollision;
+        var listed = string.Join(", ", names.Take(6)) + (names.Count > 6 ? $", and {names.Count - 6} more" : "");
+
+        var whereToLook = guide.Written
+            ? $"{AddingAssetsGuide.FileName} has been put in your mod folder. It explains how to make a " +
+              "collision file and how to check the name inside it matches your model."
+            : $"SAFT could not write {AddingAssetsGuide.FileName} into your mod folder ({guide.Reason}). " +
+              "See the Adding Assets guide on the SAFT releases page.";
+
+        var confirm = new ConfirmDialog(
+            $"This mod places {names.Count} new object(s) but includes no collision for them: {listed}.\n\n" +
+            "Anything placed on the map needs a collision (.col) file. Without one the game crashes as " +
+            "soon as you load a save — anywhere on the map, not just near the object. So SAFT will not " +
+            "add these.\n\n" +
+            whereToLook + "\n\n" +
+            "Install the rest of the mod anyway?",
+            "Skip them, replacements only",
+            "Don't install",
+            StreamingSeverity.Serious);
+        confirm.ShowDialog(this);
+        return confirm.Result;
+    }
+
     /// <summary>Sets a progress bar's fractional (archive-count + within-archive-fraction) position using scaled integer steps, since WinForms' ProgressBar.Value is an int, not the double WPF's was.</summary>
     private static void SetScaledProgress(ProgressBar bar, int groupIndex, int groupCount, int filesDone, int filesTotal)
     {
@@ -168,7 +545,7 @@ public partial class MainForm : Form
             if (proceed != DialogResult.Yes) return;
         }
 
-        GameFolderBox.Text = folder;
+        ShareGameFolder(folder);
         _scanResults = null;
         ExtractButton.Enabled = false;
         ScanSummaryText.Text = "";
@@ -250,6 +627,26 @@ public partial class MainForm : Form
             if (_scanResults != scanResults || ExtractDestBox.Text != destination) return; // stale by the time this finished
 
             ExtractWarningText.Text = $"Warning, extracted game files will take up approximately {FormatSize(totalBytes)} of storage.";
+
+            // Also said out loud, once, the first time a size is worked out for this destination.
+            // The label alone was not doing the job: it is red text sitting directly above other red
+            // text, which the eye reads as one block and skips. Extraction is the first and most
+            // inviting button in the app, and it is the single most expensive thing SAFT can do -
+            // whoever is about to press it should have had to dismiss something.
+            if (_warnedAboutExtractionSize != destination)
+            {
+                _warnedAboutExtractionSize = destination;
+                ConfirmDialog.Acknowledgement(
+                    $"Extracting this game will write about {FormatSize(totalBytes)} into:\n{destination}\n\n" +
+                    $"That is over 20,000 separate files. On Windows this takes a few minutes. On Winlator " +
+                    "it can take a long time - creating that many files one at a time is slow on Android's " +
+                    "storage, and it is the slowest thing SAFT does by a wide margin.\n\n" +
+                    "You only need this tab to rebuild the game from scratch. To install a mod, use " +
+                    "\"Install Mod(s) without extraction\" instead - it changes only the files your mod " +
+                    "touches and takes seconds.",
+                    "OK, I understand",
+                    StreamingSeverity.Caution).ShowDialog(this);
+            }
         }
         catch (Exception ex)
         {
@@ -276,6 +673,10 @@ public partial class MainForm : Form
         ExtractSubProgressText.Text = "Starting…";
         SetExtractControlsEnabled(false);
 
+        // Logged per STAGE, never per file - the whole reason extraction was slow is that per-file
+        // work reaches the UI thread. This fires a handful of times for the entire run, and turns
+        // "it closed itself somewhere in models" into a line naming the archive and the file count.
+        var loggedStage = "";
         var progress = new Progress<ExtractionProgress>(p =>
         {
             SetScaledProgress(ExtractProgressBar, p.ArchiveIndex, p.ArchiveCount, p.FilesDone, p.FilesTotal);
@@ -283,11 +684,17 @@ public partial class MainForm : Form
             ExtractSubProgressBar.Maximum = Math.Max(1, p.FilesTotal);
             ExtractSubProgressBar.Value = Math.Clamp(p.FilesDone, 0, ExtractSubProgressBar.Maximum);
             ExtractSubProgressText.Text = $"[{p.ArchiveIndex}/{p.ArchiveCount}] {p.CurrentArchive} — file {p.FilesDone:N0} of {p.FilesTotal:N0}";
+
+            if (p.CurrentArchive == loggedStage) return;
+            loggedStage = p.CurrentArchive;
+            ActivityLog.Note($"extract: starting {p.CurrentArchive} ({p.FilesTotal:N0} file(s)), stage {p.ArchiveIndex} of {p.ArchiveCount}");
         });
 
         try
         {
+            ActivityLog.Note($"extract: starting, audio {(includeAudio ? "included" : "excluded")}, into {destFolder}");
             var manifest = await Task.Run(() => Extractor.Extract(gameFolder, destFolder, includeAudio, progress));
+            ActivityLog.Note($"extract: finished, {manifest.Archives.Count} archive(s)");
             ExtractSubProgressText.Text = "Done.";
             MessageBox.Show($"Extraction complete. {manifest.Archives.Count} archive(s) extracted to {destFolder}.", "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -435,7 +842,7 @@ public partial class MainForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Install failed: {ex.Message}", "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ReportFailure(ex, "Install");
         }
         finally
         {
@@ -457,7 +864,6 @@ public partial class MainForm : Form
 
         RebuildDestRow.Visible = NewFolderOption.Checked;
         InPlaceWarningText.Visible = InPlaceWithBackupOption.Checked;
-        NoBackupWarningText.Visible = InPlaceNoBackupOption.Checked;
     }
 
     private void OnBrowseRebuildDest(object? sender, EventArgs e)
@@ -492,15 +898,6 @@ public partial class MainForm : Form
                 "A .img.bak backup of each original is created automatically, inside the corresponding folder within the rebuilt game directory. Continue?",
                 "SAFT", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (confirm != DialogResult.Yes) return;
-        }
-        else if (!newFolder) // in-place, no backup — the destructive option
-        {
-            var confirm = new ConfirmDialog(
-                "WARNING! This is an irreversible and permanent replacement of your game files, so make sure to back up the clean game in case any mods are no longer preferred in the future. No backup will be made by SAFT. Continue?",
-                "yes, install without backups",
-                "no, cancel this rebuild");
-            confirm.ShowDialog(this);
-            if (!confirm.Result) return;
         }
 
         RebuildProgressBar.Value = 0;
@@ -581,7 +978,7 @@ public partial class MainForm : Form
             if (proceed != DialogResult.Yes) return;
         }
 
-        DirectGameFolderBox.Text = folder;
+        ShareGameFolder(folder);
         UpdateDirectInstallButtonEnabled();
     }
 
@@ -597,15 +994,6 @@ public partial class MainForm : Form
     {
         DirectInstallButton.Enabled =
             !string.IsNullOrWhiteSpace(DirectGameFolderBox.Text) && !string.IsNullOrWhiteSpace(DirectModFolderBox.Text);
-    }
-
-    private void OnDirectBackupModeChanged(object? sender, EventArgs e)
-    {
-        if (!_uiReady) return;
-
-        var noBackup = DirectNoBackupOption.Checked;
-        DirectBackupDestRow.Visible = !noBackup;
-        DirectNoBackupWarningText.Visible = noBackup;
     }
 
     private void OnBrowseDirectBackupDest(object? sender, EventArgs e)
@@ -625,35 +1013,134 @@ public partial class MainForm : Form
             return;
         }
 
-        var makeBackups = DirectBackupOption.Checked;
-        if (makeBackups && string.IsNullOrWhiteSpace(DirectBackupDestBox.Text))
+        if (string.IsNullOrWhiteSpace(DirectBackupDestBox.Text))
         {
-            MessageBox.Show("Pick a backup folder first, or switch to the no-backup option.", "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(
+                "Pick a backup folder first. Every original file is backed up before it is replaced, " +
+                "and that backup is what the Uninstall tab restores from.",
+                "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
-        }
-
-        if (!makeBackups)
-        {
-            var confirm = new ConfirmDialog(
-                "WARNING! No backups will be made. Replaced files cannot be recovered through SAFT — make sure you have a clean copy of the game elsewhere. Continue?",
-                "yes, replace files without backups",
-                "no, cancel this mod installation");
-            confirm.ShowDialog(this);
-            if (!confirm.Result) return;
         }
 
         DirectProgressBar.Value = 0;
         DirectSubProgressBar.Value = 0;
-        DirectSubProgressText.Text = "Checking mod files against the live game…";
         DirectInstallButton.Enabled = false;
+
+        // The checks before the first popup used to move nothing but a line of grey text, which on a
+        // slow device reads as a window that has locked up. They are a known, fixed number of steps,
+        // so they can be shown as steps — a filling bar rather than a still one. Deliberately the
+        // ordinary determinate bar already used everywhere else in the app, not a marquee: a marquee
+        // is a different comctl32 style and this is not the place to find out how Wine draws it.
+        const int analysisSteps = 4;
+        var analysisStep = 0;
+        void Analysing(string what)
+        {
+            DirectSubProgressBar.Maximum = analysisSteps;
+            DirectSubProgressBar.Value = Math.Clamp(analysisStep, 0, analysisSteps);
+            DirectSubProgressText.Text = what;
+            analysisStep++;
+        }
+
+        Analysing("Checking mod files against the live game…");
 
         try
         {
+            ActivityLog.Note($"install: planning against {modFolder}");
             var plan = await Task.Run(() => DirectModInstaller.Plan(gameFolder, modFolder));
+            ActivityLog.Note($"install: plan has {plan.Matches.Count} archived + {plan.UnarchivedMatches.Count} loose match(es)");
 
             WarnAboutRefusedScripts(plan.RefusedScripts);
 
-            if (plan.Matches.Count == 0 && plan.AudioMatches.Count == 0 && plan.StreamMatches.Count == 0 && plan.UnarchivedMatches.Count == 0)
+            // Everything the game already has, so the scanner can tell an addition from a replacement.
+            Analysing("Checking what your game already has…");
+            var existing = await Task.Run(() => GameFileNames(gameFolder));
+            ActivityLog.Note($"install: game holds {existing.Count} known file name(s); scanning for additions");
+
+            Analysing("Checking what this mod adds…");
+            var additions = await Task.Run(() => AdditionScanner.Scan(gameFolder, modFolder, existing.Contains));
+
+            // What the mod does to the streaming budget — this applies to replacement-only mods too,
+            // which is where an over-heavy pack quietly stops the world rendering.
+            Analysing("Checking how much this mod adds to what your game has to load…");
+            var replacementSizes = await Task.Run(() => ReplacementSizes(plan));
+            ActivityLog.Note("install: measuring streaming impact");
+            var impact = await Task.Run(() => StreamingImpact.Measure(gameFolder, replacementSizes));
+
+            // Full, so the last step reads as finished rather than as stopped three quarters of the
+            // way along while the popup is being built.
+            DirectSubProgressBar.Value = analysisSteps;
+            DirectSubProgressText.Text = "Checks complete.";
+            // The baseline goes in whether or not this mod adds anything: it describes the game being
+            // installed into, which matters just as much for a pure replacement.
+            var verdict = StreamingAdvice.Compose(
+                additions.HasAdditions ? additions.Density : null, impact, additions.Density.Baseline);
+            ActivityLog.Note($"install: verdict {verdict.Severity}, within range {verdict.WithinRange}");
+
+            if (!ConfirmStreamingImpact(verdict))
+            {
+                DirectSubProgressText.Text = "Cancelled.";
+                return;
+            }
+
+            var installAdditions = false;
+            if (additions.HasAdditions)
+            {
+                // Asked first, because every prompt below it assumes the answer. They are all about
+                // adding these files properly, and none of them are any use to someone whose real
+                // problem is that they meant to replace something and misnamed it.
+                if (additions.NewAssets.Count > 0 && !ConfirmAdditionsAreIntentional(plan, additions))
+                {
+                    DirectSubProgressText.Text = "Cancelled.";
+                    return;
+                }
+
+                // Checked before anything else after that, because it's the only one that isn't a
+                // judgement call: placing an object with no collision crashes the game on load,
+                // every time.
+                if (additions.PlacesModelsWithoutCollision)
+                {
+                    if (!ConfirmSkippingAdditionsWithoutCollision(gameFolder, modFolder, additions))
+                    {
+                        DirectSubProgressText.Text = "Cancelled.";
+                        return;
+                    }
+                }
+                else if (additions.LacksPlacementData)
+                {
+                    if (!ConfirmAdditionsWithoutPlacementData(gameFolder, modFolder, additions))
+                    {
+                        DirectSubProgressText.Text = "Cancelled.";
+                        return;
+                    }
+                }
+                else if (!additions.FitsInAvailableSlots)
+                {
+                    if (!ConfirmAdditionsThatDoNotFit(additions))
+                    {
+                        DirectSubProgressText.Text = "Cancelled.";
+                        return;
+                    }
+                }
+                else
+                {
+                    installAdditions = ConfirmAdditions(additions);
+                }
+            }
+
+            // Installing a mod that is already installed removes the old copy first rather than
+            // layering a second one on top. Without that, the same models would be added again under
+            // fresh object ids, leaving duplicate assets, duplicate map lines and two identically
+            // named records that the Uninstall tab can't tell apart.
+            var modName = Path.GetFileName(modFolder.TrimEnd(Path.DirectorySeparatorChar));
+            var alreadyInstalled = installAdditions ? FindInstalledMod(DirectBackupDestBox.Text, modName) : null;
+            if (alreadyInstalled is not null && !ConfirmReinstall(alreadyInstalled))
+            {
+                installAdditions = false;
+                alreadyInstalled = null;
+            }
+
+            if (plan.Matches.Count == 0 && plan.AudioMatches.Count == 0 && plan.StreamMatches.Count == 0
+                && plan.UnarchivedMatches.Count == 0 && !installAdditions)
             {
                 DirectSubProgressText.Text = "Done.";
                 var unmatchedCount = plan.Unmatched.Count + plan.AudioUnmatched.Count + plan.StreamUnmatched.Count;
@@ -702,21 +1189,101 @@ public partial class MainForm : Form
                     $"[{p.ArchiveIndex}/{p.ArchiveCount}] {p.CurrentArchive}: {p.Stage} — file {p.FilesDone:N0} of {p.FilesTotal:N0}";
             });
 
-            var backupFolder = makeBackups ? DirectBackupDestBox.Text : null;
+            var backupFolder = DirectBackupDestBox.Text;
             var result = await Task.Run(() => DirectModInstaller.Apply(plan, backupFolder, progress));
+
+            AdditionInstallResult? added = null;
+            if (installAdditions && additions is not null)
+            {
+                DirectSubProgressText.Text = "Adding new objects…";
+                var additionProgress = new Progress<AdditionProgress>(p =>
+                {
+                    DirectSubProgressText.Text = $"{p.Stage} — {p.FilesDone:N0} of {p.FilesTotal:N0}";
+                    DirectSubProgressBar.Maximum = Math.Max(1, p.FilesTotal);
+                    DirectSubProgressBar.Value = Math.Clamp(p.FilesDone, 0, DirectSubProgressBar.Maximum);
+                });
+
+                // Removing the previous copy first is what keeps installing idempotent: whatever
+                // happens, this mod ends up present exactly once, with one record.
+                if (alreadyInstalled is not null && backupFolder is not null)
+                {
+                    DirectSubProgressText.Text = "Removing the previously installed copy…";
+                    var priorManifest = AdditionsManifest.Load(backupFolder);
+                    if (priorManifest is not null)
+                    {
+                        await Task.Run(() => AdditionUninstaller.Remove(
+                            gameFolder, priorManifest, new[] { modName }, additionProgress));
+                        priorManifest.Save(backupFolder);
+                    }
+
+                    // The old copy's assets and ids are gone, so what counts as "new" has changed.
+                    DirectSubProgressText.Text = "Rechecking what this mod adds…";
+                    var names = await Task.Run(() => GameFileNames(gameFolder));
+                    additions = await Task.Run(() => AdditionScanner.Scan(gameFolder, modFolder, names.Contains));
+                }
+
+                added = await Task.Run(() => AdditionInstaller.Apply(gameFolder, additions, modName, additionProgress));
+
+                // The record of what was added lives in the backup folder, alongside the originals of
+                // anything replaced — an added asset has no vanilla counterpart, so without this the
+                // uninstall tab would have no way to know the addition ever happened.
+                if (backupFolder is not null)
+                {
+                    var manifest = AdditionsManifest.Load(backupFolder) ?? new AdditionsManifest { GameRootPath = gameFolder };
+
+                    // Belt and braces: if a record under this name somehow survived, replace it
+                    // rather than sitting alongside it.
+                    manifest.Mods.RemoveAll(m => m.Name.Equals(modName, StringComparison.OrdinalIgnoreCase));
+                    manifest.Mods.Add(added.Recorded);
+                    manifest.Save(backupFolder);
+                }
+            }
 
             DirectSubProgressText.Text = "Done.";
 
             var filesReplaced = result.Archives.Sum(s => s.FilesReplaced);
             var tooLargeCount = plan.AudioMatchesTooLarge.Count + plan.StreamMatchesTooLarge.Count;
             var failedCount = result.AudioFailed.Count + result.StreamFailed.Count;
-            var unmatchedFileCount = plan.Unmatched.Count + plan.AudioUnmatched.Count + plan.StreamUnmatched.Count;
+            // Files the addition path handled are not "unmatched" — nor are the .ide/.ipl snippets,
+            // which are instructions rather than assets. Counting them made a fully successful
+            // install report every file in the mod folder as having failed.
+            var consumedByAdditions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (additions is not null)
+            {
+                foreach (var asset in additions.NewAssets) consumedByAdditions.Add(asset.FileName);
+            }
+
+            var unmatchedFileCount =
+                plan.Unmatched.Count(n =>
+                    !consumedByAdditions.Contains(n)
+                    && !n.EndsWith(".ide", StringComparison.OrdinalIgnoreCase)
+                    && !n.EndsWith(".ipl", StringComparison.OrdinalIgnoreCase))
+                + plan.AudioUnmatched.Count + plan.StreamUnmatched.Count;
 
             var summaryLines = new List<string>
             {
                 $"Mod installation complete. {filesReplaced} file(s) replaced across {result.Archives.Count} archive(s)."
             };
             if (result.Unarchived.Count > 0) summaryLines.Add($"{result.Unarchived.Count} game file(s) replaced outside the archives (map data, etc).");
+            if (added is not null)
+            {
+                summaryLines.Add(
+                    $"{added.Recorded.ObjectIds.Count} new object(s) added, using object slot(s) " +
+                    $"{string.Join(", ", added.Recorded.ObjectIds)}.");
+
+                if (added.Recorded.Collisions.Count > 0)
+                    summaryLines.Add($"Collision installed for {added.Recorded.Collisions.Count} model(s).");
+
+                // Not a problem — an empty collision record is how you deliberately make something
+                // you can walk through — but worth saying, since it's also what an accidentally
+                // emptied record looks like.
+                if (additions is { WalkThroughModels.Count: > 0 } a)
+                    summaryLines.Add(
+                        $"{a.WalkThroughModels.Count} object(s) will be walk-through, because their collision " +
+                        $"has no shape in it: {string.Join(", ", a.WalkThroughModels.Take(6))}.");
+
+                foreach (var problem in added.Problems) summaryLines.Add(problem);
+            }
             if (result.Audio.Count > 0) summaryLines.Add($"{result.Audio.Count} audio file(s) patched.");
             if (result.Streams.Count > 0) summaryLines.Add($"{result.Streams.Count} streamed track(s) patched.");
             if (result.UnarchivedFailed.Count > 0) summaryLines.Add($"{result.UnarchivedFailed.Count} game file(s) could not be written and were skipped.");
@@ -727,13 +1294,34 @@ public partial class MainForm : Form
             if (tooLargeCount > 0) summaryLines.Add($"{tooLargeCount} audio file(s) were too large to replace and were skipped.");
             if (failedCount > 0) summaryLines.Add($"{failedCount} audio file(s) failed to read and were skipped.");
             if (unmatchedFileCount > 0) summaryLines.Add($"{unmatchedFileCount} file(s) didn't match anything in your game and were left unplaced.");
-            summaryLines.Add(makeBackups ? $"Originals of every replaced file were backed up to: {backupFolder}" : "No backups were made.");
+            // Only claim backups were made if something was actually replaced. An addition has no
+            // original to back up, so saying "originals were backed up" after a pure addition sends
+            // the user looking for files that were never supposed to exist.
+            var replacedAnything = filesReplaced > 0 || result.Unarchived.Count > 0
+                || result.Audio.Count > 0 || result.Streams.Count > 0;
+
+            if (replacedAnything)
+            {
+                summaryLines.Add($"Originals of every replaced file were backed up to: {backupFolder}");
+
+                // Naming the file matters: it's the one thing the Uninstall tab cannot work without,
+                // and it's easy to tidy away without realising what it was for.
+                if (added is not null)
+                    summaryLines.Add(
+                        $"The record of what was added is {AdditionsManifest.FileName}, in that same folder. " +
+                        "The Uninstall tab needs that file to remove them again, so keep it with the backups.");
+            }
+            else if (added is not null)
+                summaryLines.Add(
+                    $"Nothing needed backing up — added objects have no original to replace. The record of " +
+                    $"what was added is {AdditionsManifest.FileName}, in {backupFolder}. The Uninstall tab " +
+                    "needs that file to remove them again, so keep it there.");
 
             MessageBox.Show(string.Join("\n", summaryLines), "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Install failed: {ex.Message}", "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ReportFailure(ex, "Install");
         }
         finally
         {
@@ -757,7 +1345,7 @@ public partial class MainForm : Form
             if (proceed != DialogResult.Yes) return;
         }
 
-        UninstallGameFolderBox.Text = folder;
+        ShareGameFolder(folder);
         UpdateUninstallButtonEnabled();
     }
 
@@ -817,7 +1405,31 @@ public partial class MainForm : Form
 
             WarnAboutRefusedScripts(plan.RefusedScripts);
 
-            if (plan.Matches.Count == 0 && plan.AudioMatches.Count == 0 && plan.StreamMatches.Count == 0 && plan.UnarchivedMatches.Count == 0)
+            // Additions have no vanilla counterpart, so nothing about them sits in the backup folder
+            // as a file — the record SAFT wrote at install time is the only trace, which is exactly
+            // why it lives here alongside the backed-up originals.
+            var additionsManifest = await Task.Run(() => AdditionsManifest.Load(backupFolder));
+            var modsToRemove = additionsManifest?.Mods.Select(m => m.Name).ToList() ?? new List<string>();
+
+            if (modsToRemove.Count > 0)
+            {
+                var confirm = new ConfirmDialog(
+                    $"This backup folder also records {modsToRemove.Count} mod(s) whose objects SAFT ADDED to " +
+                    "your game:\n\n    " + string.Join("\n    ", modsToRemove) + "\n\n" +
+                    "Uninstalling these will also require rebuilding the archives, because your mods added " +
+                    "assets on top of the originals. This adds time to the uninstall. Continue?",
+                    "Uninstall and rebuild",
+                    "Not yet");
+                confirm.ShowDialog(this);
+                if (!confirm.Result)
+                {
+                    UninstallSubProgressText.Text = "Cancelled.";
+                    return;
+                }
+            }
+
+            if (plan.Matches.Count == 0 && plan.AudioMatches.Count == 0 && plan.StreamMatches.Count == 0
+                && plan.UnarchivedMatches.Count == 0 && modsToRemove.Count == 0)
             {
                 UninstallSubProgressText.Text = "Done.";
                 MessageBox.Show("No backup files matched anything in your current install. Nothing was changed.", "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -865,6 +1477,26 @@ public partial class MainForm : Form
             var modBackupFolder = makeModBackup ? UninstallBackupDestBox.Text : null;
             var result = await Task.Run(() => DirectModInstaller.Apply(plan, modBackupFolder, progress));
 
+            // Additions come out first: their removal rebuilds the archive, and doing it before the
+            // ordinary restores keeps the two from rebuilding the same archive twice.
+            AdditionRemovalResult? removed = null;
+            if (modsToRemove.Count > 0 && additionsManifest is not null)
+            {
+                UninstallSubProgressText.Text = "Removing added objects…";
+                var removalProgress = new Progress<AdditionProgress>(p =>
+                {
+                    UninstallSubProgressText.Text = $"{p.Stage} — {p.FilesDone:N0} of {p.FilesTotal:N0}";
+                    UninstallSubProgressBar.Maximum = Math.Max(1, p.FilesTotal);
+                    UninstallSubProgressBar.Value = Math.Clamp(p.FilesDone, 0, UninstallSubProgressBar.Maximum);
+                });
+
+                removed = await Task.Run(() =>
+                    AdditionUninstaller.Remove(gameFolder, additionsManifest, modsToRemove, removalProgress));
+
+                // The record is rewritten so a later uninstall doesn't try to remove all this again.
+                additionsManifest.Save(backupFolder);
+            }
+
             UninstallSubProgressText.Text = "Done.";
 
             var filesRestored = result.Archives.Sum(s => s.FilesReplaced);
@@ -877,6 +1509,25 @@ public partial class MainForm : Form
                 $"Uninstall complete. {filesRestored} file(s) restored across {result.Archives.Count} archive(s)."
             };
             if (result.Unarchived.Count > 0) summaryLines.Add($"{result.Unarchived.Count} game file(s) restored outside the archives (map data, etc).");
+            if (removed is not null)
+            {
+                summaryLines.Add(
+                    $"{removed.RemovedMods.Count} added mod(s) removed: {removed.ArchiveEntriesRemoved} asset(s) " +
+                    $"taken back out of the archives and {removed.DataLinesRemoved} map entry/entries deleted, " +
+                    $"freeing {removed.FreedObjectIds.Count} object slot(s).");
+
+                // Skips are usually the same handful of reasons repeated once per file, which turned
+                // a summary into a wall of near-identical lines. Grouped and counted instead, with a
+                // couple of examples — the detail that matters is the reason, not the roll call.
+                foreach (var group in removed.Skipped
+                             .GroupBy(SkipReason, StringComparer.OrdinalIgnoreCase)
+                             .OrderByDescending(g => g.Count()))
+                {
+                    summaryLines.Add(group.Count() == 1
+                        ? $"Left alone: {group.First()}"
+                        : $"Left alone ({group.Count()}x): {group.Key}");
+                }
+            }
             if (result.Audio.Count > 0) summaryLines.Add($"{result.Audio.Count} audio file(s) restored.");
             if (result.Streams.Count > 0) summaryLines.Add($"{result.Streams.Count} streamed track(s) restored.");
             if (result.UnarchivedFailed.Count > 0) summaryLines.Add($"{result.UnarchivedFailed.Count} game file(s) could not be written and were skipped.");

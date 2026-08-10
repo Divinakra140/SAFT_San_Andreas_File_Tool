@@ -44,6 +44,12 @@ public static class ModInstaller
     public static ModInstallResult Install(
         string extractionRoot, string modSourceFolder, IProgress<ModInstallProgress>? progress = null)
     {
+        // Throttled at the door, so every progress?.Report below it - including the ones passed
+        // down into the private helpers - costs a UI round trip ten times a second rather than
+        // once per file. See ThrottledProgress: per-file reporting is what made a full extraction
+        // take hours under Winlator.
+        progress = new ThrottledProgress<ModInstallProgress>(progress);
+
         var manifest = SaftManifest.Load(extractionRoot);
 
         var archivesByFileName = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);

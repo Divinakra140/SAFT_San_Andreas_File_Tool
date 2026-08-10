@@ -9,13 +9,27 @@ namespace SAFT.Core;
 /// </summary>
 public static class FileFilters
 {
-    public static bool IsIgnoredFile(string fileName)
+    /// <summary>
+    /// Clutter the operating system creates by itself, which was never part of anyone's mod or game.
+    ///
+    /// Separate from <see cref="IsIgnoredFile"/> because the two are not interchangeable: this one is
+    /// safe to apply to the GAME's own files, where the wider filter is not. San Andreas ships real
+    /// .txt files it reads at runtime (AudioEvents.txt, PedEvent.txt, AudioEventHistory.txt), so
+    /// skipping .txt while rebuilding a game folder would quietly drop them.
+    /// </summary>
+    public static bool IsFilesystemJunk(string fileName)
     {
-        if (fileName.Equals(SaftManifest.FileName, StringComparison.OrdinalIgnoreCase)) return true;
         if (fileName.StartsWith("._", StringComparison.Ordinal)) return true;
         if (fileName.Equals(".DS_Store", StringComparison.OrdinalIgnoreCase)) return true;
         if (fileName.Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase)) return true;
         if (fileName.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    public static bool IsIgnoredFile(string fileName)
+    {
+        if (fileName.Equals(SaftManifest.FileName, StringComparison.OrdinalIgnoreCase)) return true;
+        if (IsFilesystemJunk(fileName)) return true;
         if (fileName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }

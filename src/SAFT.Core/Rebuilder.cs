@@ -66,6 +66,12 @@ public static class Rebuilder
     public static IReadOnlyList<RebuildSummary> Rebuild(
         string extractionRoot, string outputRoot, IProgress<RebuildProgress>? progress = null)
     {
+        // Throttled at the door, so every progress?.Report below it - including the ones passed
+        // down into the private helpers - costs a UI round trip ten times a second rather than
+        // once per file. See ThrottledProgress: per-file reporting is what made a full extraction
+        // take hours under Winlator.
+        progress = new ThrottledProgress<RebuildProgress>(progress);
+
         var manifest = SaftManifest.Load(extractionRoot);
         var summaries = new List<RebuildSummary>();
 
@@ -228,8 +234,30 @@ public static class Rebuilder
     }
 
     /// <summary>
-    /// Rebuilds into a temp folder — archives, loose files, and reconstituted audio alike — then
-    /// installs the entire result over <paramref name="gameRoot"/>. If <paramref name="makeBackups"/>,
+    /// Where a whole rebuilt game is assembled before being installed over the real one.
+    ///
+    /// Next to the game folder, NOT in the system temp folder. A full rebuild is the size of the
+    /// game — several gigabytes — and the temp folder is frequently on a different drive from the
+    /// game: under Winlator it lives inside the Wine container on the device's internal storage
+    /// while the game sits on an SD card. Building there means writing gigabytes to the wrong disk
+    /// and copying every byte back across, which on a device short of internal storage does not
+    /// finish at all.
+    ///
+    /// Falls back to the temp folder only if the game's own parent directory can't be written to,
+    /// which at least preserves the old behaviour rather than failing outright.
+    /// </summary>
+    private static string StagingFolderFor(string gameRoot)
+    {
+        var parent = Path.GetDirectoryName(Path.GetFullPath(gameRoot.TrimEnd(Path.DirectorySeparatorChar)));
+        if (!string.IsNullOrEmpty(parent) && FolderAccess.CheckWritable(parent).CanWrite)
+            return Path.Combine(parent, "SAFT-rebuild-" + Guid.NewGuid().ToString("N"));
+
+        return Path.Combine(Path.GetTempPath(), "SAFT-rebuild-" + Guid.NewGuid().ToString("N"));
+    }
+
+    /// <summary>
+    /// Rebuilds into a staging folder beside the game — archives, loose files, and reconstituted
+    /// audio alike — then installs the entire result over <paramref name="gameRoot"/>. If <paramref name="makeBackups"/>,
     /// each original archive and each original unpacked audio package/station is copied next to
     /// itself as "&lt;name&gt;.bak" (only if a backup doesn't already exist there) before being
     /// overwritten; ordinary loose files are just overwritten, matching how in-place rebuilds have
@@ -238,7 +266,13 @@ public static class Rebuilder
     public static IReadOnlyList<RebuildSummary> RebuildInPlace(
         string extractionRoot, string gameRoot, bool makeBackups, IProgress<RebuildProgress>? progress = null)
     {
-        var tempOutput = Path.Combine(Path.GetTempPath(), "SAFT-rebuild-" + Guid.NewGuid());
+        // Throttled at the door, so every progress?.Report below it - including the ones passed
+        // down into the private helpers - costs a UI round trip ten times a second rather than
+        // once per file. See ThrottledProgress: per-file reporting is what made a full extraction
+        // take hours under Winlator.
+        progress = new ThrottledProgress<RebuildProgress>(progress);
+
+        var tempOutput = StagingFolderFor(gameRoot);
         try
         {
             // Rebuild()'s own reports carry their own group count (e.g. "9" groups); this call has
@@ -272,7 +306,15 @@ public static class Rebuilder
             // just the handful of archives) this pass alone can take minutes, and with no progress
             // reporting at all the app looked completely frozen right after "done" showed for the
             // rebuild itself. Enumerated up front so the total is known for reporting.
-            var filesToInstall = Directory.EnumerateFiles(tempOutput, "*", SearchOption.AllDirectories).ToList();
+            // Junk the filesystem creates on its own is skipped rather than installed into the game.
+            // It matters more now that staging happens beside the game instead of in the system temp
+            // folder: on exFAT — which is what an SD card holding a game usually is — macOS drops a
+            // "._name" sidecar next to every file, and those are transient enough that trying to
+            // move one can fail outright. Windows has its own versions (Thumbs.db, desktop.ini).
+            var filesToInstall = Directory
+                .EnumerateFiles(tempOutput, "*", SearchOption.AllDirectories)
+                .Where(p => !FileFilters.IsFilesystemJunk(Path.GetFileName(p)))
+                .ToList();
             for (var i = 0; i < filesToInstall.Count; i++)
             {
                 var source = filesToInstall[i];

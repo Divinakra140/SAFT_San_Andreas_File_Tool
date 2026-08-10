@@ -86,6 +86,45 @@ public class DirectModInstallerTests
     }
 
     [Fact]
+    public void Patching_in_place_shrinks_the_entry_size_so_the_game_stops_streaming_the_old_length()
+    {
+        // The size field in the directory is what the game streams by. Leaving it at the old value
+        // makes a smaller replacement cost exactly what the file it replaced did — a texture pack
+        // installed byte-for-byte correctly changed nothing in game because its entry still claimed
+        // 28.8 MB for a 10.4 MB dictionary. Needs a multi-sector entry to catch: a replacement that
+        // shrinks within one sector rounds back to the same sector count and hides the bug.
+        var gameRoot = TestScratch.NewDir();
+        Directory.CreateDirectory(Path.Combine(gameRoot, "models"));
+        File.WriteAllText(Path.Combine(gameRoot, "gta_sa.exe"), "stub");
+
+        var archivePath = Path.Combine(gameRoot, "models", "gta3.img");
+        ImgArchive.Write(archivePath, new[]
+        {
+            File_("big.txd", new string('O', ImgEntry.SectorSize * 3)),   // 3 sectors allocated
+            File_("untouched.col", "should never change"),
+        });
+
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "big.txd"), new string('N', 100));   // fits in 1
+
+        var plan = DirectModInstaller.Plan(gameRoot, modSource);
+        Assert.False(plan.AnyArchiveNeedsRebuild);
+        DirectModInstaller.Apply(plan, backupOutputFolder: null);
+
+        using var archive = ImgArchive.Open(archivePath);
+        var replaced = archive.Entries.Single(e => e.Name == "big.txd");
+
+        Assert.Equal(1, replaced.SizeSectors);
+        Assert.Equal(ImgEntry.SectorSize, replaced.ByteSize);
+
+        // The following entry keeps its own offset — shrinking a size field must not shuffle
+        // anything, since nothing else in the archive moved.
+        var untouched = archive.Entries.Single(e => e.Name == "untouched.col");
+        using var reader = new StreamReader(archive.OpenEntry(untouched), Encoding.ASCII);
+        Assert.StartsWith("should never change", reader.ReadToEnd());
+    }
+
+    [Fact]
     public void Apply_rebuilds_the_archive_when_a_replacement_is_too_big_to_patch()
     {
         var gameRoot = BuildGameRoot();
@@ -129,6 +168,43 @@ public class DirectModInstallerTests
 
         var backedUpFile = Path.Combine(backupFolder, "models", "gta3.img", "dff", "banshee.dff");
         Assert.True(File.Exists(backedUpFile));
+        Assert.StartsWith("original car model", File.ReadAllText(backedUpFile));
+    }
+
+    [Fact]
+    public void A_second_install_into_the_same_backup_folder_keeps_the_vanilla_copy()
+    {
+        // The whole point of a backup folder is getting back to stock. Installing a second mod that
+        // touches the same file used to back up the FIRST MOD'S file over the vanilla one, because
+        // by then that is what's in the game — silently destroying the only way back while still
+        // reporting a successful backup.
+        var gameRoot = BuildGameRoot();
+        var backupFolder = TestScratch.NewDir();
+
+        var firstMod = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(firstMod, "banshee.dff"), "FIRST MOD");
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, firstMod), backupOutputFolder: backupFolder);
+
+        var secondMod = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(secondMod, "banshee.dff"), "SECOND MOD");
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, secondMod), backupOutputFolder: backupFolder);
+
+        var backedUpFile = Path.Combine(backupFolder, "models", "gta3.img", "dff", "banshee.dff");
+        Assert.StartsWith("original car model", File.ReadAllText(backedUpFile));
+    }
+
+    [Fact]
+    public void Installing_the_same_mod_twice_does_not_overwrite_its_own_backup()
+    {
+        var gameRoot = BuildGameRoot();
+        var backupFolder = TestScratch.NewDir();
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "banshee.dff"), "MODDED");
+
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, modSource), backupOutputFolder: backupFolder);
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, modSource), backupOutputFolder: backupFolder);
+
+        var backedUpFile = Path.Combine(backupFolder, "models", "gta3.img", "dff", "banshee.dff");
         Assert.StartsWith("original car model", File.ReadAllText(backedUpFile));
     }
 

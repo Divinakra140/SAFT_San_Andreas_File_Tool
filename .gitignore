@@ -5,6 +5,8 @@ publish/
 ._*
 .DS_Store
 
-# Published portable exe (~150MB) — rebuild with `dotnet publish`
+# Published portable exes (~150MB each) — rebuild with `dotnet publish`
 # (see README.md), then attach to a GitHub Release instead of committing.
+# SAFT is the two-tab build; SAFT Dev is the same source with -p:ModDev=true.
 SAFT/
+SAFT Dev/

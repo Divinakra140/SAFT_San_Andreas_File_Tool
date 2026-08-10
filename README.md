@@ -2,13 +2,17 @@
 
 *Developed by Divinakra, August 2026*
 
-- **[SAFT](https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/releases/download/v1.6/SAFT.exe)** is a portable 32-bit Windows tool compatible with any build or version of the PC game: GTA San
-  Andreas, only the originals v1-v3, not the Definitive Edition.
+- **[SAFT](https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/releases/latest)** and **[SAFT-Dev](https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/releases/latest)** are portable 32-bit Windows tools compatible with any build or version of the PC
+  game: GTA San Andreas, only the originals v1-v3, not the Definitive Edition.
 - SAFT also runs well in certain PC emulators on Android — to be clear, that means SAFT modifies the 
   original PC game and SAFT can launch and function inside an emulated Windows container on Android. 
   SAFT cannot modify the Android port of GTA SA, only PC. 
 - SAFT contains no Game assets, and only allows for users to modify their own GTA SA Game with their own mods.
-- SAFT is a file extractor, identifier and replacer; it knows where every modified file goes, based on name.
+- SAFT is a file extractor, identifier, replacer and **adder**; it knows where every modified file goes, based on name.
+- SAFT ships as **two exes**. **SAFT.exe** has two tabs — *Install Mods* and *Uninstall Mods* — and
+  everything in it finishes in seconds, which makes it the one to use under Android emulation.
+  **SAFT-Dev.exe** adds *Extract Game Files*, *Install Mod(s) into Extracted* and *Rebuild from
+  Extracted* for mod developers; those three write over 20,000 separate files and are a Windows job.
 
 Tested extensively against a real Steam release of GTA San Andreas (v3.0, specifically the "newsteam r2"
 December 2014 patch — all 8 archives, 61,993 sound effects, and 1,922 streamed tracks verified
@@ -73,15 +77,19 @@ new engine parts you want to bring to him as long as they fall into the 11 categ
 
 And as long as they are named correctly.
 
-This tool does not contain any games or mods, it's just a file replacer, as long as you bring your own
-GTA San Andreas PC game, and some mods, this tool can do all the work of replacing the game's vanilla
-files with your modded files. SAFT scans your whole San Andreas PC Game directory and as long as your 
-mod files are named exactly the same as the vanilla game files they aim to replace, SAFT will scan your
-whole mod folder, and pick all the replaceable files and will replace them in your game directory. There 
-are options built into SAFT that will automatically back up your vanilla files, to anywhere you tell it
-to, so maybe make a folder called "backups" and tell it to back everything up there before you modify 
-some files that you regret later. That way if you don't want the mods anymore,you can just use SAFT to
-replace the modded files back with the vanilla files using the 5th "Uninstall Mod(s)" tab.
+This tool contains no games and no mods. You bring your own GTA San Andreas PC game and your own
+mods, and SAFT does the work. It both **replaces** files the game already has and **adds** files it
+has never seen, and it decides which is which from the file name: a file named exactly like a game
+file is a replacement, anything else is an addition.
+
+That naming rule is the whole system, so SAFT protects you from getting it wrong. If your mod folder
+contains files that match nothing in your game, SAFT stops and asks whether you meant to add them,
+before touching anything — because a taxi replacement has to be called `taxi.dff`, not `mytaxi.dff`,
+and a misnamed replacement would otherwise be installed as a second, separate object.
+
+Every original file is backed up before it is replaced, to a folder you choose. That backup is what
+the *Uninstall Mods* tab restores from, so it is always done — it is not optional, and it costs only
+a few megabytes since only the files actually being replaced get copied.
 
 SAFT also has an extraction tool built into it, and can extract your whole GTA San Andreas Game into
 an organized folder structure with all the individually named vanilla game files for you to manually
@@ -92,19 +100,16 @@ SAFT will not extract the audio archives by default becuase of how much more sto
 takes to extract all the audio files, so if you are an audio mod dev, you can choose to also extract
 the audio with the "Extract Audio As well?" check box. 
 
-Most people who are not mod developers and are mod users and gamers will want to use the fourth option 
-from the right called "Install Mod(s) without Extraction"  then leave the first bullet selected: 
-"Backup original files before replacing (reccomended)" as this will enable future clean mod uninstalls.
+Gamers and mod users want the **Install Mods** tab — the first tab in SAFT, and the fourth in
+SAFT-Dev where it is called *Install Mod(s) without extraction*. It puts mod files straight into the
+live game in seconds, no extraction involved.
 <img width="1399" height="374" alt="cropped tab4" src="https://github.com/Divinakra140/SAFT_San_Andreas_File_Tool/blob/main/assets/Winlator%20screenshot%20Cropped.png" />
-This is the most destructive tool contained within SAFT and allows you to replace files instantaneously
-within your game directory without extracting anything (or backing anything up if you dont want to). This
-works very fast as long as you don't try to replace with any huge files. If SAFT notices that the mod 
-files you are providing are bigger in size than the vanilla files they replace, it will tell you that
-the archive needs rebuilding. You can tell it no, and stop the file replacement before it happens, or 
-you can say, "yes" and it will still work just as seamlessly as with small files, but it will take a 
-bit longer. Thats because SAFT is not only replacing a file, its gotta make room for your big files 
-and rebuild the archive around it. The "archive" its referring to is the "gta3.img" or "player.img" 
-that all the individual game files and assets are contained within.
+Before installing anything it weighs the mod and tells you whether your game will still render
+properly with it in (see *Green, Amber and Red* below), and it asks you to confirm anything it isn't
+certain about. If your mod files are bigger than the vanilla files they replace, it will say the
+archive needs rebuilding — say yes, that's normal and expected, it just takes a bit longer because
+SAFT has to make room. The "archive" it means is `gta3.img` or `player.img`, the big containers every
+game asset lives inside.
 
 SAFT is a windows exe that is designed to also run in certain windows PC emulators. The two that
 are currently known to work are [Winlator Official](https://github.com/brunodev85/winlator/releases/tag/v11.1.0) and [Winlator Bionic Vanilla](https://github.com/StevenMXZ/Winlator-Ludashi/releases/tag/v3.1.h). For
@@ -129,7 +134,7 @@ directory if you know how to do that. SAFT only knows how to replace files alrea
 3. For quick replacement of files. Simply find the mod(s) you want online and unzip the .zip archive
    to see the full folder structure of the mod. That main mod folder is what you want to provide to SAFT.
 
-4. Then click "Install mod(s) Without Extraction"
+4. Then click **"Install Mods"** (in SAFT-Dev it is called *"Install Mod(s) without extraction"*).
 
 5. Then browse for your "Game Folder" where the gta-sa.exe is located, and select that folder that
    contains your gta-sa.exe as the "Game Folder". (it doesn't matter what your game .exe is named,
@@ -137,35 +142,48 @@ directory if you know how to do that. SAFT only knows how to replace files alrea
 
 6. Then for "Mod Folder", browse to the mod folder you downloaded and unzipped in step 3.
 
-7. Then decide whether you want your vanilla game files backed up or not. If you want them backed up,
-   than leave the top option selected "Backup original files before replacing" and tell it where you
-   want your vanilla files backed up to. If you already have a backup elsewhere, or don't want a backup,
-   click the second option: "Replace files without backups".
+7. Then pick a **"Backup folder"**. Your vanilla files are always backed up there before anything is
+   replaced — this is what makes uninstalling possible later, so it is not optional.
 
 8. Then hit "Install Mod into Game files" and you should see some loading screens. Thats it!
 
-9. If you get a window that tells you that your mod is bigger than the game files and the archive
-   needs to be rebuilt, then just rebuild it, there's nothing lost here, that's normal and expected, and
-   SAFT needs to make room for your bigger mods. Otherwise the modded files will simply now live in your
-   game directory in place of the vanilla files. Your done. It's really that easy. Launch game normally.
+9. Answer the windows SAFT shows you. It will say how heavy the mod is (green/amber/red, below), it
+   will ask before rebuilding an archive to fit bigger files, and if your mod contains files the game
+   doesn't already have it will ask whether you meant to **add** them or misnamed a replacement.
+   Nothing is written until you've answered. Then you're done — launch the game normally.
    
-10. If you want to uninstall a mod or a list of mods, you must have already backed up the original game
-    files into distinct backup folders, for each mod or groups of mods that you might want uninstalled.
-	Then simply use the 5th tab from the right as you have used all the others, whatever vanilla game
-	files it finds in your backup folder, it will put back into your game directory where they belong, 
-	getting rid of the currently loaded mod files. If you want to uninstall all your mods, just keep 
-	all your vanilla game files backed up in one big folder and then select that as your backup folder.
+10. To uninstall, use the **Uninstall Mods** tab and point it at the backup folder you used when you
+    installed. Whatever vanilla files it finds there go back where they belong, and anything SAFT
+    **added** is removed too — its object slots freed, its map entries deleted. Use a separate backup
+    folder per mod to remove them individually, or one folder for everything to undo the lot at once.
 
-11. If you are someone who wants to extract the whole game, and manually replace files, and rebuild it
-    afterwards, simply use the first three tabs in that order "extract" "install" then "rebuild". You get
-    the same result as someone who uses the fourth option, but you will be more intimately connected
-    with the names of the files and how they are laid out. Mod developers will often want to use this
-    option, whereas gamers and mod-users will usually want to use the fourth faster option. If you are a
-    mod dev and want to modify the audio, make sure to click the option under extraction to "extract
-    audio files as well". This is unselected by default because it takes forever to extract the whole
-    game including audio. If you are a casual gamer, just make sure your mod folder has audio in a
-    nested folder structure and not just loose .wav and .ogg files, as audio is the only file that needs
-    nested folders to be id'd by SAFT.
+11. To extract the whole game, edit files by hand and rebuild it, use **SAFT-Dev**'s first three tabs
+    in order: extract, install, rebuild. Same end result as the fast route, but you see every filename
+    and how it's laid out. Mod devs modifying audio should tick *"extract audio files as well"* — off
+    by default because it takes far longer. Be warned: extraction writes over 20,000 separate files
+    and can take a very long time under Android emulation, so use Windows for it if you can. Casual
+    users never need this. Either way, audio must sit in its nested folder structure, not as loose
+    `.wav`/`.ogg` files — audio is the only type SAFT identifies by folder rather than by name.
+
+---
+
+## Green, Amber and Red: will this mod still render?
+
+San Andreas streams the world in as you move, and every area has a budget. A mod that makes one area
+much heavier than the game expects shows up as objects failing to appear until you stop and look at
+them. SAFT weighs your mod before installing anything and tells you where you land:
+
+| Band | Weight vs vanilla | What to expect |
+|---|---|---|
+| **GREEN** | up to 2.2x | renders perfectly everywhere |
+| **AMBER** | 2.3x - 3.1x | breaks where the mod loads heaviest, rest of the game is fine |
+| **RED** | above 3.2x | breaks everywhere you go; around 4x it can also crash |
+
+Those come from playing the game at each weight on a Retroid Pocket Flip 2, not from a formula. The
+figure SAFT shows is what your game holds **after** installing, so a mod going onto an already-heavy
+game is judged on the result rather than on how big a step it is. Every mod puts its weight somewhere
+different, so treat these as the shape of the problem rather than exact lines. SAFT is at its best
+with SA-style and LQ mods; 4K retextures of everything are what red is for.
 
 ---
 
@@ -182,11 +200,9 @@ SAFT only accepts the native GTA SA file types, no .DAE for models, no mp3 for a
 5. **Audio:** mono 16-bit `.wav` for SFX and `.ogg` for Music (both are built in export options from audacity)
 6. **Map Data:** `.ipl` (where every object sits in the world) and `.ide` (what each object IS — its
    model, texture and draw distance). This is what map mods are made of.
-7. **Paths:** `nodes*.dat` — the invisible road and pavement network that vehicles and
-   pedestrians navigate on — plus `.rrr` car recordings. A car recording is a pre-recorded vehicle
-   route: a sequence of position, rotation and speed samples played back when a scripted vehicle
-   has to drive an exact path (mission vehicles, the train on its track, planes on set flight
-   paths, cutscene traffic). Replacing one changes the route and speed that vehicle takes.
+7. **Paths:** `nodes*.dat` — the invisible road and pavement network vehicles and pedestrians
+   navigate on — plus `.rrr` car recordings, the pre-recorded routes scripted vehicles follow
+   (mission cars, the train, planes on set flight paths). Replacing one changes that route and speed.
 8. **Data Tables:** `handling.cfg` (vehicle handling), `weapon.dat`, `carcols.dat`, `carmods.dat`,
    `.zon` map zones, `.ped` / `.grp` pedestrian behaviour, and the rest of the `data/` tables.
 9. **Text:** `.gxt` — every subtitle, mission caption and menu string in the game, which means full
@@ -209,13 +225,11 @@ game folder — SAFT can replace all of them.
 | `.img` | Whole archives. SAFT works *inside* these; swapping one wholesale would bypass everything it does. |
 | `.scm` | Game scripts — `data/script/main.scm` and the scripts inside `script.img`. See below. |
 
-The script rule matters, so it's worth explaining. **SAFT only installs what it can uninstall.**
-Every other file it touches is self-contained: put the original back and the change is completely
-undone. Scripts are not. San Andreas save files are written against the script's global variable
-layout, and they also store a table of references pointing at the scripts inside `script.img` *by
-position*. Replace a script and an existing save can end up pointing into code that no longer
-matches it. Saves live in `Documents\GTA San Andreas User Files`, outside your game folder, so no
-backup SAFT makes can undo that. A broken save stays broken.
+The script rule is a rule, not a limitation: **SAFT only installs what it can uninstall.** Every
+other file it touches is self-contained — put the original back and the change is undone. Scripts are
+not. Saves are written against the script's global variable layout and store references to the
+scripts inside `script.img` *by position*, so replacing one can leave an existing save pointing at
+code that no longer matches. Saves live outside your game folder, so no backup SAFT makes undoes that.
 
 So SAFT refuses, and tells you when your mod folder contains one. If you still want it, `main.scm`
 is a single unarchived file at `data > script > main.scm` — drag your modded copy over it yourself.
@@ -300,7 +314,7 @@ Links to download them from the original authors are here:
 GTA San Andreas (PC) ships its models, textures, collision, animations,
 cutscenes, and minigame scripts inside VER2-format .img archives — a
 directory table followed by sector-aligned (2048-byte), UNCOMPRESSED
-concatenated files. The app has five tabs:
+concatenated files. **SAFT** has two tabs; **SAFT-Dev** has all five:
 
 1. **Extract Game Files** — recursively finds every .img file under the chosen
    install folder (verifying the VER2 magic before treating it as an
@@ -350,38 +364,34 @@ concatenated files. The app has five tabs:
    - *Rebuild into a new folder* — a complete standalone second playable
      copy of the game: archives, loose files, and any reconstituted
      audio, all included.
-   - *Install over the original files, with backups* — each archive AND
-     each reconstituted audio package/station is backed up next to
-     itself (as ".bak") before being overwritten; ordinary loose files
-     are just overwritten.
-   - *Install over the original files, no backups* — irreversible;
-     requires an explicit confirmation.
+   - *Install over the original files* — each archive AND each reconstituted
+     audio package/station is backed up next to itself (as ".bak") before
+     being overwritten; ordinary loose files are just overwritten.
 
-4. **Install Mod(s) without extraction** — installs mod files straight into
-   the live archives, no extraction step. A replacement that fits within
-   the space its original entry already occupied is patched in place (the
-   directory table never moves); one that's too big forces a rebuild of
-   just that one archive, and you're asked to confirm before that happens.
-   Backs up each original entry's content to a folder you choose before
-   touching it, unless you explicitly opt out (with a warning).
+4. **Install Mods** (*Install Mod(s) without extraction* in SAFT-Dev) —
+   installs mod files straight into the live archives, no extraction step. A
+   replacement that fits the space its original entry occupied is patched in
+   place; one that's too big forces a rebuild of just that archive, and
+   you're asked first. Files matching nothing in the game are treated as
+   **additions**: SAFT finds free object slots (a stock game has about
+   5,127), writes its own .ide/.ipl for them, registers those with the game,
+   and merges any collision records into the shared bundle. It refuses to
+   place an object with no collision, because that crashes the game on world
+   load every time. Originals are always backed up first.
    
-5. **Uninstall Mod(s)** - Is a clone of tab 4; works the same way as 
-	"Install Mod(s) without extraction" but is worded differently
-	to direct the user to install their backed up vanilla files 
-	in place of any unpreffered mod files. This, in essence 
-	"uninstalls" any mods the user no longer wants in their 
-	game directory. This option is useless for anyone who installed
-	a mod without backups, which is why back ups are not only 
-	reccomended but enabled by default. 
+5. **Uninstall Mods** — the reverse of the above. Point it at the backup
+   folder you installed with and it puts every vanilla file back, then
+   removes anything SAFT added: object slots freed, map entries and
+   collision records deleted. Backups are mandatory precisely so this always
+   works.
 
 Filesystem/mod-package clutter that isn't a real game asset (.DS_Store,
 Thumbs.db, desktop.ini, macOS "._*" AppleDouble sidecars, and any ".txt"
 file such as a mod's readme or cleo/modloader references) are ignored everywhere files get scanned or
 matched.
 
-Every long-running step (extract, install, rebuild, copy) reports progress
-per-file, not just per-archive, with a secondary progress bar/counter so
-large archives (16k+ files) don't look frozen mid-operation.
+Every long-running step reports progress with a live file counter, and writes
+`saft-activity-log.txt` next to the exe so any problem can be pinpointed.
 
 ### Audio replacement (sound effects AND streamed music/radio)
 
@@ -434,7 +444,10 @@ dotnet test tests/SAFT.Core.Tests/SAFT.Core.Tests.csproj
 dotnet publish src/SAFT.App/SAFT.App.csproj -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 ```
 
-This produces `publish/SAFT.exe` — a single file with the .NET runtime bundled in, so it runs on a
+Add `-p:ModDev=true` to build **SAFT-Dev.exe** instead — same source tree, one compile-time switch,
+so a fix in one edition is a fix in both.
+
+This produces a single file with the .NET runtime bundled in, so it runs on a
 machine with no .NET installed. SAFT ships 32-bit only (`win-x86`) — it runs fine on 64-bit hardware
 too and is the most broadly compatible with both Windows and Wine/Winlator.
 

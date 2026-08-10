@@ -20,9 +20,22 @@
     <RootNamespace>SAFT.App</RootNamespace>
     <!-- Shows up in the exe's Properties > Details, so a downloaded copy can be identified on
          sight. Keep in step with the window title in MainForm.Layout.cs and the GitHub release tag. -->
-    <Version>1.6.0</Version>
+    <Version>2.0.0</Version>
     <Product>SAFT — San Andreas File Tool</Product>
     <Company>Divinakra</Company>
+  </PropertyGroup>
+
+  <!--
+    Two exes, one source tree. Publish with -p:ModDev=true for the developer edition.
+
+    A compile-time switch rather than two projects, because almost every bug found while testing 2.0
+    appeared on exactly one platform: two diverging copies would have meant fixing each twice and
+    eventually remembering only once. See Edition.cs for what actually differs.
+  -->
+  <PropertyGroup Condition="'$(ModDev)' == 'true'">
+    <DefineConstants>$(DefineConstants);MODDEV</DefineConstants>
+    <AssemblyName>SAFT-Dev</AssemblyName>
+    <Product>SAFT Dev — San Andreas File Tool</Product>
   </PropertyGroup>
 
   <ItemGroup>
@@ -35,7 +48,9 @@
       the exe needs no external image files or folders sitting next to it at runtime. Loaded at
       runtime via EmbeddedImages.Load(logicalName), matched to the LogicalName below.
     -->
-    <EmbeddedResource Include="..\..\assets\icon_s.png"><LogicalName>SAFT.Assets.icon_s.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\logo.png"><LogicalName>SAFT.Assets.panel.logo.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\by_line1.png"><LogicalName>SAFT.Assets.panel.by_line1.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\by_line2.png"><LogicalName>SAFT.Assets.panel.by_line2.png</LogicalName></EmbeddedResource>
     <!--
       PNG, not the original clouds_giant.jpg — Wine's GDI+ (libgdiplus) JPEG decoding has a real
       history of being unreliable/producing solid-black output on some builds, which is a strong
@@ -43,7 +58,6 @@
       consistently supported. Same source photo, just re-encoded losslessly.
     -->
     <EmbeddedResource Include="..\..\assets\panel\clouds_giant.png"><LogicalName>SAFT.Assets.clouds_panel_bg.png</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="..\..\assets\panel\replaces.png"><LogicalName>SAFT.Assets.panel.replaces.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\models.png"><LogicalName>SAFT.Assets.panel.models.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\collision.png"><LogicalName>SAFT.Assets.panel.collision.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\textures.png"><LogicalName>SAFT.Assets.panel.textures.png</LogicalName></EmbeddedResource>
@@ -55,8 +69,8 @@
     <EmbeddedResource Include="..\..\assets\panel\text.png"><LogicalName>SAFT.Assets.panel.text.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\cutscenes.png"><LogicalName>SAFT.Assets.panel.cutscenes.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\particle_effects.png"><LogicalName>SAFT.Assets.panel.particle_effects.png</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="..\..\assets\panel\title_wordmark.png"><LogicalName>SAFT.Assets.panel.title_wordmark.png</LogicalName></EmbeddedResource>
-    <EmbeddedResource Include="..\..\assets\panel\title_byline.png"><LogicalName>SAFT.Assets.panel.title_byline.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\title_bold.png"><LogicalName>SAFT.Assets.panel.title_bold.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="..\..\assets\panel\modify.png"><LogicalName>SAFT.Assets.panel.modify.png</LogicalName></EmbeddedResource>
   </ItemGroup>
 
 </Project>
