@@ -37,6 +37,67 @@ public class AdditionScannerTests
         Assert.DoesNotContain(plan.NewAssets, a => a.FileName == "banshee.dff");
     }
 
+    /// <summary>
+    /// Replacing data/peds.ide crashed SAFT 2.0. The file is one the game already has, but the
+    /// scanner parsed it anyway and reported its 276 pedestrian rows as 276 objects the mod was
+    /// adding — then tried to allocate slots and weigh them.
+    /// </summary>
+    [Fact]
+    public void An_ide_the_game_already_has_is_a_replacement_not_an_addition_manifest()
+    {
+        var mod = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(mod, "peds.ide"), """
+            peds
+            0, null, generic, PLAYER1, STAT_PLAYER, player, 0, 0, null, 9,9, PED_TYPE_PLAYER, VOICE_A, VOICE_A
+            101, WMYST, WMYST, CIVMALE, STAT_SENSIBLE_GUY, man, 0, 0, null, 9,9, PED_TYPE_GEN, VOICE_B, VOICE_B
+            end
+            """);
+
+        var plan = ScanMod(mod, GameContaining("peds.ide"));
+
+        Assert.Empty(plan.Definitions);
+        Assert.False(plan.HasAdditions);
+    }
+
+    /// <summary>
+    /// Same bug on the placement side: the PreRelease pack replaces cull.ipl, and every cull zone in
+    /// it was being counted as newly placed geometry in the density report.
+    /// </summary>
+    [Fact]
+    public void An_ipl_the_game_already_has_is_a_replacement_not_an_addition_manifest()
+    {
+        var mod = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(mod, "cull.ipl"), """
+            inst
+            700, somemodel, 0, 1.0, 2.0, 3.0, 0, 0, 0, 1, -1
+            end
+            """);
+
+        var plan = ScanMod(mod, GameContaining("cull.ipl"));
+
+        Assert.Empty(plan.Placements);
+        Assert.False(plan.HasAdditions);
+    }
+
+    /// <summary>The fix must not stop a genuinely new .ide from being read as one.</summary>
+    [Fact]
+    public void An_ide_the_game_does_not_have_is_still_read_as_an_addition_manifest()
+    {
+        var mod = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(mod, "saftcastle.dff"), "model");
+        File.WriteAllText(Path.Combine(mod, "saftcastle.txd"), "texture");
+        File.WriteAllText(Path.Combine(mod, "saftnew.ide"), """
+            objs
+            12000, saftcastle, saftcastle, 300, 0
+            end
+            """);
+
+        var plan = ScanMod(mod, GameContaining("peds.ide"));
+
+        Assert.Single(plan.Definitions);
+        Assert.True(plan.HasAdditions);
+    }
+
     [Fact]
     public void Counts_slots_as_definitions_not_files()
     {

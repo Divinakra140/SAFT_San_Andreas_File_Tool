@@ -267,3 +267,77 @@ Speed and reliability
 
 - Divinakra
 
+
+
+===================================================================================================
+CHANGELOG 2.1 - Four crashes, and what they actually were
+===================================================================================================
+
+2.0 shipped after a test pack that exercised all eleven file types, both replaced and added, and
+found nothing. What that pack did not test was SHAPES: the ways a mod folder's contents can combine.
+Every crash below is a shape, and every one of them was sitting in the public 2.0.
+
+
+A replaced .ide or .ipl was read as a list of new objects
+---------------------------------------------------------
+SAFT parsed every .ide and .ipl in a mod folder as the mod's list of things to ADD, without checking
+whether the game already had that file. Replacing data/peds.ide was therefore read as adding 276 new
+pedestrians, and SAFT went off to allocate object slots for all of them. It never came back.
+
+Files the game already has are replacements. Their contents describe the game, not additions to it.
+This also quietly affected the map: a mod replacing cull.ipl had every cull zone in it counted as
+newly placed geometry, which inflated the weight report for anything shipping one.
+
+
+Uninstalling a heavy mod could kill the app outright
+-----------------------------------------------------
+When a replacement is smaller than the file it replaces, SAFT zero-fills the leftover space. It did
+that by allocating one block of memory the size of the gap. Restoring a 1.2 MB vanilla texture into
+the 28.8 MB slot its modded replacement had grown to therefore asked for a single 27.6 MB allocation,
+with 13.5 MB and 7.4 MB right behind it in the same uninstall. SAFT is a 32-bit program, and requests
+that size can simply be refused.
+
+The heavier the mod, the more likely its uninstall died. The fill is now written in small chunks, and
+the same fix applies to the audio paths, which had it too.
+
+
+The "your mod is fine" popup was the one that crashed
+-------------------------------------------------------
+The green tick on a GREEN verdict was drawn with a call no other icon used. Under Winlator it took
+the whole program down, which meant the single popup nobody could ever see was the one telling you
+nothing was wrong. It is now drawn the same way the amber and red icons are, and a status icon that
+fails to draw is skipped rather than being allowed to stop the message appearing.
+
+
+A backup folder inside the mod folder corrupted the mod folder
+----------------------------------------------------------------
+Nothing stopped the backup folder being set to the mod folder. Doing it wrote the originals in among
+the mod's own files, and since SAFT reads a mod folder including everything under it, every file then
+matched twice - one install reported six replacements for a three-file mod, with no sign anything was
+wrong. SAFT now refuses a backup folder that sits inside the mod folder or inside the game folder,
+and says why, before anything is written.
+
+
+Wait a minute before launching
+------------------------------
+Installing finishes well before an SD card has actually finished writing, and a game started inside
+that window opens a half-written archive and hangs on a black screen. Flushing to disk did not close
+the gap. SAFT now says so after an install and holds the OK button for 60 seconds; a second button
+dismisses immediately for anyone not about to launch the game.
+
+
+Choosing a backup folder for uninstalling
+-----------------------------------------
+The Uninstall tab now warns, in red under the folder picker, that everything in the chosen folder
+gets restored over any name-matched file in the game - so a broad backup folder takes out more mods
+than intended. The readme has a new section explaining what the Uninstall button actually does and
+why it does not check whether a file needed restoring.
+
+
+Finding the next one faster
+---------------------------
+saft-activity-log.txt now records each phase of planning, weighing and uninstalling by name, with the
+memory in use on every line. Three of the four crashes above were located from that log rather than
+guessed at, and the phases that had no breadcrumbs are exactly the ones that took longest to find.
+
+- Divinakra

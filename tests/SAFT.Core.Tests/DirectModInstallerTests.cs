@@ -27,6 +27,65 @@ public class DirectModInstallerTests
         return gameRoot;
     }
 
+    /// <summary>
+    /// Uninstalling a heavy pack crashed SAFT. Restoring a small vanilla file into the slot its large
+    /// modded replacement had grown to left a multi-megabyte gap to zero-fill, and that fill was one
+    /// allocation the size of the gap — 27.6 MB in the measured case, on a 32-bit heap.
+    ///
+    /// Several megabytes here rather than a token amount: the whole point is that the gap is large.
+    /// The assertion is that the gap really is zeroed and the entry really does shrink, so a chunked
+    /// fill cannot quietly write the wrong number of bytes.
+    /// </summary>
+    [Fact]
+    public void Restoring_a_small_file_into_a_large_slot_zero_fills_the_whole_gap()
+    {
+        var gameRoot = TestScratch.NewDir();
+        Directory.CreateDirectory(Path.Combine(gameRoot, "models"));
+        File.WriteAllText(Path.Combine(gameRoot, "gta_sa.exe"), "stub");
+
+        const int bigEntryBytes = 5 * 1024 * 1024;   // the slot a modded file grew to
+        var archivePath = Path.Combine(gameRoot, "models", "gta3.img");
+        ImgArchive.Write(archivePath, new[]
+        {
+            File_("modded.txd", new string('M', bigEntryBytes)),
+            File_("after.col", "must not move or change"),
+        });
+
+        // The vanilla original coming back out of a backup folder: tiny next to the slot.
+        var backupFolder = TestScratch.NewDir();
+        const string vanilla = "the small original texture";
+        File.WriteAllText(Path.Combine(backupFolder, "modded.txd"), vanilla);
+
+        var plan = DirectModInstaller.Plan(gameRoot, backupFolder);
+        Assert.False(plan.AnyArchiveNeedsRebuild); // it fits, so this is the patch-in-place path
+        DirectModInstaller.Apply(plan, backupOutputFolder: null);
+
+        using var archive = ImgArchive.Open(archivePath);
+        var entry = archive.Entries.Single(e => e.Name == "modded.txd");
+
+        // Shrunk to what the restored file actually needs, not left at the modded length.
+        Assert.Equal((vanilla.Length + ImgEntry.SectorSize - 1) / ImgEntry.SectorSize, entry.SizeSectors);
+
+        // Every byte of the old content is gone: the restored text, then zeros to the sector boundary.
+        using var restored = archive.OpenEntry(entry);
+        var bytes = new byte[entry.ByteSize];
+        restored.ReadExactly(bytes);
+        Assert.Equal(vanilla, Encoding.ASCII.GetString(bytes, 0, vanilla.Length));
+        Assert.All(bytes.Skip(vanilla.Length), b => Assert.Equal(0, b));
+
+        // And the raw file still holds zeros across the whole abandoned gap, not just the new entry.
+        using var raw = File.OpenRead(archivePath);
+        raw.Position = entry.ByteOffset + vanilla.Length;
+        var gap = new byte[bigEntryBytes - vanilla.Length];
+        raw.ReadExactly(gap);
+        Assert.DoesNotContain((byte)'M', gap);
+
+        var after = archive.Entries.Single(e => e.Name == "after.col");
+        using var afterStream = archive.OpenEntry(after);
+        using var reader = new StreamReader(afterStream, Encoding.ASCII);
+        Assert.StartsWith("must not move or change", reader.ReadToEnd());
+    }
+
     [Fact]
     public void Plan_matches_by_name_and_flags_only_oversized_replacements_for_rebuild()
     {

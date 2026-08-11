@@ -51,15 +51,23 @@ public static class StreamingImpact
     /// Compares the game as it is against the game as this mod would leave it.
     /// <paramref name="replacementSizes"/> maps a file name the mod replaces ("banshee.txd") to the
     /// size of the mod's version.
+    ///
+    /// <paramref name="onStep"/> is a diagnostic breadcrumb sink, called before each phase, for the
+    /// same reason <see cref="DirectModInstaller.Plan"/> has one: this is several seconds of the
+    /// heaviest work SAFT does behind a single call, and a process killed part way through it left
+    /// no way to tell which phase it died in.
     /// </summary>
-    public static StreamingImpactReport Measure(string gameRoot, IReadOnlyDictionary<string, long> replacementSizes)
+    public static StreamingImpactReport Measure(
+        string gameRoot, IReadOnlyDictionary<string, long> replacementSizes, Action<string>? onStep = null)
     {
+        onStep?.Invoke("measure: reading definitions");
         // Read once and handed to everything below. This method used to parse the .ide files three
         // separate times - here, inside WeighGameAssets, and again for the id-to-name map - and it is
         // the most expensive step there is, so on an SD card that was most of the wait before the
         // first popup.
         var definitions = PlacementDensity.ReadDefinitions(gameRoot);
 
+        onStep?.Invoke($"measure: {definitions.Count:N0} definition(s); weighing game assets");
         var before = PlacementDensity.WeighGameAssets(gameRoot, definitions);
         var after = new Dictionary<string, ModelWeight>(before, StringComparer.OrdinalIgnoreCase);
 
@@ -86,6 +94,7 @@ public static class StreamingImpact
             else if (PlacedSections.Contains(definition.Section)) replacedPlaced.Add(definition.ModelName);
         }
 
+        onStep?.Invoke($"measure: {before.Count:N0} weighted model(s); parsing text .ipl files");
         var placements = new List<IplInstance>();
         foreach (var path in IplFile.FindAll(gameRoot))
         {
@@ -97,13 +106,21 @@ public static class StreamingImpact
         // out here put "the heaviest area of your map" at 8.6 MB in this report while the density
         // baseline, which does read them, called the same game 32.0 MB - two different answers to
         // the same question in one popup.
+        onStep?.Invoke($"measure: {placements.Count:N0} text placement(s); reading binary .ipl from archives");
         var namesById = PlacementDensity.ModelNamesById(definitions);
         placements.AddRange(BinaryIplFile.ReadAllFromGame(
             gameRoot, id => namesById.TryGetValue(id, out var name) ? name : string.Empty));
 
+        onStep?.Invoke($"measure: {placements.Count:N0} placement(s) total; weighing the map as it is now");
+        var heaviestBefore = HeaviestArea(placements, before);
+
+        onStep?.Invoke($"measure: heaviest area now {heaviestBefore / 1048576.0:N1} MB; weighing it with the mod applied");
+        var heaviestAfter = HeaviestArea(placements, after);
+
+        onStep?.Invoke($"measure: heaviest area after {heaviestAfter / 1048576.0:N1} MB; totalling dynamic weight");
         return new StreamingImpactReport(
-            HeaviestArea(placements, before),
-            HeaviestArea(placements, after),
+            heaviestBefore,
+            heaviestAfter,
             TotalDynamicWeight(definitions, before),
             TotalDynamicWeight(definitions, after),
             replacedPlaced.Count,

@@ -174,6 +174,40 @@ need this. Whichever route you take, audio must sit in its nested folder structu
 
 
 -----------------------------------------------------------------------------------------
+How Uninstalling Actually Works:
+--------------------------------
+
+The Uninstall tab is a sheep in wolf's clothing. It sounds like a big destructive operation and it
+is not one: it copies files out of your backup folder back into your game, matched by filename, and
+that is the whole of it. Two things follow from that, and both are worth knowing.
+
+YOUR BACKUP FOLDER IS THE CONTROL, NOT THE TAB. SAFT restores whatever it finds in there and nothing
+else, so if you do not want it putting a pile of vanilla files back over vanilla files you already
+have, delete those out of the backup folder and keep only the ones that actually correspond to
+something you modded. SAFT will not touch what is not in there. That is the same reason a separate
+backup folder per mod lets you remove mods one at a time while one shared folder undoes the lot.
+
+SAFT DOES NOT CHECK WHETHER A FILE NEEDS RESTORING. If your game already has the vanilla file, SAFT
+writes the vanilla file over it anyway. Nothing is harmed, the bytes are identical - but it does
+mean the number it reports at the end is how many files it wrote, not how many were actually
+different. Uninstalling onto an already-vanilla game will happily tell you it restored everything.
+
+That missing check is deliberate. On an ordinary 64-bit desktop app it would be nearly free, and
+every uninstaller does it. Here it is not free: SAFT works inside the archives, so checking whether
+one 1 MB texture needs restoring can mean reading 28 MB back off your SD card first. Skipping the
+check keeps the common case fast on the hardware SAFT is actually used on.
+
+The safer meaning matters more than the speed, though. As written, "restore" means this file WILL be
+vanilla when SAFT is finished, whatever state it was in beforehand. With a check it would only mean
+this file will be vanilla if the comparison was right - and a comparison that is subtly wrong
+quietly skips a file that genuinely needed restoring. Guaranteeing the write is worth more than
+saving it.
+
+If nothing in your backup folder shares a name with anything in your game, SAFT says so and changes
+nothing at all.
+
+
+-----------------------------------------------------------------------------------------
 Green, Amber and Red: will this mod still render?
 -------------------------------------------------
 

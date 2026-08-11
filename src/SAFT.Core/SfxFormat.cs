@@ -161,6 +161,6 @@ public sealed class SfxBank
 
         var remaining = originalLength - newPcm.Length;
         if (remaining > 0)
-            writeStream.Write(new byte[remaining]);
+            ZeroFill.Write(writeStream, remaining);
     }
 }

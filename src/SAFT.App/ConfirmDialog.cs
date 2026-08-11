@@ -29,7 +29,23 @@ public sealed class ConfirmDialog : Form
     public static ConfirmDialog Acknowledgement(string message, string okText, StreamingSeverity severity) =>
         new(message, okText, string.Empty, severity, singleButton: true);
 
-    private ConfirmDialog(string message, string yesText, string noText, StreamingSeverity? severity, bool singleButton)
+    /// <summary>
+    /// Two buttons, where the FIRST is disabled for a fixed number of seconds and the second is live
+    /// immediately. The user is held back from the thing that needs the wait, and free to do the
+    /// thing that does not.
+    ///
+    /// Used after an install: launching the game right away is what breaks, so that button waits.
+    /// Carrying on inside SAFT is harmless, so that one does not. The wait is not superstition -
+    /// writing an archive finishes long before an SD card has committed it, and a game started inside
+    /// that window opens a half-written archive and hangs on a black screen. Flushing to disk did not
+    /// close the gap; it was measured still happening afterwards.
+    /// </summary>
+    public static ConfirmDialog Wait(string message, string waitingText, string skipText, int seconds) =>
+        new(message, waitingText, skipText, null, singleButton: false, countdownSeconds: seconds);
+
+    private ConfirmDialog(
+        string message, string yesText, string noText, StreamingSeverity? severity, bool singleButton,
+        int countdownSeconds = 0)
     {
         // Building a window is the step most likely to fault inside an emulated Windows rather than
         // throw something catchable, and a dialog that never appeared is exactly what a user sees as
@@ -66,6 +82,11 @@ public sealed class ConfirmDialog : Form
 
         var buttons = new List<Button> { MakeButton(yesText, true) };
         if (!singleButton) buttons.Add(MakeButton(noText, false));
+
+        // Only the first button waits; any second button stays live, so the user always has a way
+        // out of the dialog that does not involve sitting through a countdown they do not need.
+        // Done before the layout below measures anything, so the button is already at its final width.
+        if (countdownSeconds > 0) StartCountdown(buttons[0], yesText, countdownSeconds);
 
         const int spacing = 8;
         var buttonsWidth = buttons.Sum(b => b.Width) + spacing * (buttons.Count - 1);
@@ -132,15 +153,39 @@ public sealed class ConfirmDialog : Form
 
         if (severity is { } level)
         {
-            Controls.Add(new PictureBox
+            // The icon is decoration. It must never be the reason a dialog fails to appear, and it
+            // has been exactly that: drawing the green tick took the whole process down under
+            // Winlator, so the one verdict that means "your mod is fine" was the one nobody could
+            // ever see. GDI+ is the least portable surface in the app and the icon is worth the
+            // least, so any failure here drops the icon and keeps the message.
+            // Logged either side, because a hard GDI+ fault is not catchable and leaves nothing
+            // behind. Without this the log jumped straight from "building" to the next session and
+            // the icon was indistinguishable from the rest of the layout as a suspect.
+            ActivityLog.Note($"dialog: drawing {level} status icon");
+
+            Image? icon = null;
+            try
             {
-                Left = DialogMargin,
-                Top = DialogMargin,
-                Width = IconSize,
-                Height = IconSize,
-                Image = DrawStatusIcon(level),
-                SizeMode = PictureBoxSizeMode.Normal,
-            });
+                icon = DrawStatusIcon(level);
+                ActivityLog.Note("dialog: status icon drawn");
+            }
+            catch (Exception ex)
+            {
+                ActivityLog.Note($"dialog: status icon could not be drawn, continuing without it - {ex.Message}");
+            }
+
+            if (icon is not null)
+            {
+                Controls.Add(new PictureBox
+                {
+                    Left = DialogMargin,
+                    Top = DialogMargin,
+                    Width = IconSize,
+                    Height = IconSize,
+                    Image = icon,
+                    SizeMode = PictureBoxSizeMode.Normal,
+                });
+            }
         }
 
         var buttonTop = messageBox.Top + messageBox.Height + 16;
@@ -171,6 +216,59 @@ public sealed class ConfirmDialog : Form
         ClientSize = new Size(
             contentWidth + DialogMargin * 2,
             buttonTop + buttonBlockHeight + DialogMargin);
+    }
+
+    /// <summary>The button's caption while it is still counting down.</summary>
+    private static string Counting(string readyText, int seconds) => $"{readyText}  ({seconds})";
+
+    /// <summary>
+    /// Disables a button and re-enables it once <paramref name="seconds"/> have actually elapsed.
+    /// </summary>
+    private void StartCountdown(Button button, string readyText, int seconds)
+    {
+        // Sized up front for the widest caption it will ever hold, so it does not resize under the
+        // user's thumb as the number counts down from two digits to one.
+        var widest = Counting(readyText, seconds);
+        button.Width = TextRenderer.MeasureText(widest, button.Font).Width + 28;
+        button.Text = widest;
+        button.Enabled = false;
+
+        // Driven off the wall clock, not off a count of ticks. Under an emulated Windows a timer
+        // that misses ticks would otherwise hold the button disabled well past the time it promised.
+        var until = DateTime.UtcNow.AddSeconds(seconds);
+        var timer = new System.Windows.Forms.Timer { Interval = 250 };
+
+        void Release()
+        {
+            timer.Stop();
+            button.Text = readyText;
+            button.Enabled = true;
+        }
+
+        timer.Tick += (_, _) =>
+        {
+            var remaining = (int)Math.Ceiling((until - DateTime.UtcNow).TotalSeconds);
+            if (remaining <= 0) { Release(); return; }
+
+            var caption = Counting(readyText, remaining);
+            if (button.Text != caption) button.Text = caption;
+        };
+
+        // Fail OPEN, never closed. The one way this feature could do real harm is a timer that never
+        // fires, leaving the only button permanently disabled and the app needing to be killed. The
+        // install has already finished by the time this dialog appears, so skipping the wait costs a
+        // recoverable freeze, while a dead timer costs the user their whole session.
+        try
+        {
+            timer.Start();
+        }
+        catch (Exception ex)
+        {
+            ActivityLog.Note($"dialog: countdown timer would not start, enabling immediately - {ex.Message}");
+            Release();
+        }
+
+        FormClosed += (_, _) => { try { timer.Dispose(); } catch { /* nothing left to do about it */ } };
     }
 
     private Button MakeButton(string text, bool isYes)
@@ -236,12 +334,13 @@ public sealed class ConfirmDialog : Form
 
         if (severity == StreamingSeverity.Fine)
         {
-            g.DrawLines(pen, new[]
-            {
-                new PointF(S(0.27), S(0.52)),
-                new PointF(S(0.43), S(0.68)),
-                new PointF(S(0.74), S(0.34)),
-            });
+            // Two separate DrawLine calls rather than one DrawLines polyline. The amber and red icons
+            // below have always drawn correctly using DrawLine and FillEllipse; DrawLines was used
+            // only here, only for the tick, and it is the one call in this method that had never run
+            // on the target platform. It crashed the process under Winlator rather than throwing.
+            // The round line caps close the corner, so the tick looks the same as it did.
+            g.DrawLine(pen, S(0.27), S(0.52), S(0.43), S(0.68));
+            g.DrawLine(pen, S(0.43), S(0.68), S(0.74), S(0.34));
             return bitmap;
         }
 

@@ -44,7 +44,7 @@ public partial class MainForm
         // The build time is in the title so there is never any doubt about which exe is running. A
         // whole round of testing was spent unsure whether a fix was even in the copy being launched.
         var built = File.GetLastWriteTime(Environment.ProcessPath ?? AppContext.BaseDirectory);
-        Text = $"{Edition.Name} 2.0 — {Edition.Tagline}   [build {built:yyyy-MM-dd HH:mm}]";
+        Text = $"{Edition.Name} 2.1 — {Edition.Tagline}   [build {built:yyyy-MM-dd HH:mm}]";
         Width = 1040;
         Height = 760;
         MinimumSize = new Size(880, 600);
@@ -726,6 +726,8 @@ public partial class MainForm
         var tab = new TabPage(Edition.IncludesModDeveloperTabs ? "Uninstall Mod(s)" : "Uninstall Mods");
         tabs.TabPages.Add(tab);
 
+        // The height here is only a starting value; the panel is resized to its actual content at the
+        // end of this method, so adding a row does not need it adjusted.
         var top = new Panel { Dock = DockStyle.Top, Height = 320, Padding = new Padding(10) };
         tab.Controls.Add(top);
 
@@ -743,6 +745,19 @@ public partial class MainForm
 
         PlaceRow(top, BuildBrowseRow("Backup Folder:", 110, out var uninstallBackupFolderBox, OnBrowseUninstallBackupFolder), ref y, 26);
         UninstallBackupFolderBox = uninstallBackupFolderBox;
+
+        // Directly under the folder picker, in red, because it describes what that one choice does
+        // and nothing else on this tab changes it. Uninstalling restores every name-matched file in
+        // the folder, and does not check whether a file needed restoring - so the folder IS the
+        // selection, and a broad folder quietly takes more mods out than the user meant.
+        var backupFolderWarning = BuildWrappedLabel(
+            "Choose your backup folder carefully; any files in it will overwrite any of the name-matched " +
+            "files in your game directory, so if you don't want certain mods uninstalled, select a more " +
+            "specific backup folder that only contains the files you want uninstalled.",
+            color: Color.FromArgb(170, 30, 30));
+        backupFolderWarning.Dock = DockStyle.None;
+        AutoHeightWrap(backupFolderWarning, EstimatedContentWidth);
+        PlaceRow(top, backupFolderWarning, ref y, backupFolderWarning.Height, 4);
 
         UninstallBackupModsCheckBox = new CheckBox
         {

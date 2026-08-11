@@ -52,6 +52,54 @@ public static class FolderAccess
     /// (an unavailable drive, or a platform that won't report it). Callers use this to warn before a
     /// large rebuild rather than running out of room mid-write.
     /// </summary>
+    /// <summary>
+    /// Whether <paramref name="candidate"/> is <paramref name="container"/> or sits inside it.
+    /// Compared on full, normalised paths so "..", a trailing slash or a different case cannot slip
+    /// past. A sibling whose name merely starts with the same text ("Backups2" next to "Backups") is
+    /// correctly NOT inside, which is why the separator is appended before comparing.
+    /// </summary>
+    public static bool IsInsideOrSame(string candidate, string container)
+    {
+        if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(container)) return false;
+
+        static string Normalise(string path) =>
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)) + Path.DirectorySeparatorChar;
+
+        try
+        {
+            return Normalise(candidate).StartsWith(Normalise(container), StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // A malformed path is not something to throw over from a validation helper.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Why this backup folder must not be used, or null if it is fine.
+    ///
+    /// Both cases below have actually happened rather than being imagined. Pointing the backup folder
+    /// at the MOD folder writes the originals in among the mod's own files, and since SAFT scans a
+    /// mod folder recursively, every file then matches twice — one install reported six replacements
+    /// for a three-file mod, and which copy of each file won was down to enumeration order. Pointing
+    /// it at the GAME folder is the same mistake one step worse: the backups become game files, so
+    /// SAFT would go on to find, weigh and potentially replace its own backups.
+    /// </summary>
+    public static string? WhyBackupFolderIsUnusable(string backupFolder, string gameFolder, string modFolder)
+    {
+        if (IsInsideOrSame(backupFolder, modFolder))
+            return "The backup folder is inside your mod folder. SAFT reads a mod folder including " +
+                   "everything under it, so the backed-up originals would be treated as part of the " +
+                   "mod and installed over your game. Pick a backup folder somewhere else.";
+
+        if (IsInsideOrSame(backupFolder, gameFolder))
+            return "The backup folder is inside your game folder. The backups would become game files, " +
+                   "which SAFT would then read as part of the game. Pick a backup folder outside it.";
+
+        return null;
+    }
+
     public static long? GetAvailableFreeBytes(string folder)
     {
         try

@@ -71,13 +71,44 @@ internal static class ActivityLog
                 // AppendAllText opens, writes and closes, so the bytes are on the device before the
                 // call returns. That is the entire point here - a StreamWriter left open would lose
                 // the last and most important line.
-                File.AppendAllText(Path, $"{DateTime.Now:HH:mm:ss.fff}  {step}{Environment.NewLine}");
+                File.AppendAllText(Path, $"{DateTime.Now:HH:mm:ss.fff} {Memory()}  {step}{Environment.NewLine}");
             }
         }
         catch
         {
             // Read-only media, or no room. Losing the breadcrumb is bad; failing the operation the
             // user actually asked for because the breadcrumb failed would be worse.
+        }
+    }
+
+    /// <summary>
+    /// How much memory the process is holding, stamped on every line.
+    ///
+    /// Three crashes in one evening landed on three different steps, none of them reproducible on a
+    /// 64-bit machine where the same work peaks at 44 MB live. That pattern is what running out of
+    /// address space looks like from the outside: the failure lands on whichever allocation happens
+    /// to come next, so patching each site in turn never converges. SAFT is a 32-bit process with a
+    /// 2 GB ceiling, and until these numbers are on the record, "it ran out of memory" is a theory.
+    ///
+    /// This deliberately reports ONLY the managed heap, via GC.GetTotalMemory, which is pure runtime
+    /// bookkeeping and touches no OS call.
+    ///
+    /// It used to also report the private working set via Process.GetCurrentProcess(). That was a
+    /// mistake twice over. Winlator returned 0 for it, so it carried no information at all — and it
+    /// put a partially implemented Win32 call on every single breadcrumb, on a platform where the
+    /// crash being investigated is a silent process kill. The build that added it died EARLIER than
+    /// the build before it. A diagnostic that may itself be destabilising the thing it is measuring
+    /// is worse than no diagnostic.
+    /// </summary>
+    private static string Memory()
+    {
+        try
+        {
+            return $"[gc {GC.GetTotalMemory(false) / 1048576,4:N0}MB]";
+        }
+        catch
+        {
+            return "[gc    ?MB]";
         }
     }
 

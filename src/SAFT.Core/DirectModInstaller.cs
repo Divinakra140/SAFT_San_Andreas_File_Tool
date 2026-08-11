@@ -159,11 +159,18 @@ public static class DirectModInstaller
     /// <see cref="DirectInstallPlan.AnyArchiveNeedsRebuild"/>, <see cref="DirectInstallPlan.AudioMatchesTooLarge"/>,
     /// and <see cref="DirectInstallPlan.StreamMatchesTooLarge"/> before calling <see cref="Apply"/>.
     /// </summary>
-    public static DirectInstallPlan Plan(string gameRoot, string modSourceFolder)
+    /// <summary>
+    /// <paramref name="onStep"/> is a diagnostic breadcrumb sink, called before each phase. Planning
+    /// is several seconds of work behind a single call, and when the process was killed part way
+    /// through it there was no way to tell which phase it died in. The app passes ActivityLog.Note.
+    /// </summary>
+    public static DirectInstallPlan Plan(string gameRoot, string modSourceFolder, Action<string>? onStep = null)
     {
+        onStep?.Invoke("plan: finding archives");
         var foundArchives = GameScanner.FindArchives(gameRoot);
         var index = new Dictionary<string, List<(FoundArchive Archive, ImgEntry Entry)>>(StringComparer.OrdinalIgnoreCase);
 
+        onStep?.Invoke($"plan: indexing {foundArchives.Count} archive(s)");
         foreach (var found in foundArchives)
         {
             using var archive = ImgArchive.Open(found.AbsolutePath);
@@ -178,9 +185,16 @@ public static class DirectModInstaller
             }
         }
 
+        onStep?.Invoke($"plan: {index.Count} archive entry name(s) indexed; indexing SFX");
         var audioIndex = BuildAudioIndex(gameRoot);
+
+        onStep?.Invoke($"plan: {audioIndex.Count} SFX slot(s); indexing streamed audio");
         var streamIndex = BuildStreamIndex(gameRoot);
+
+        onStep?.Invoke($"plan: {streamIndex.Count} track(s); indexing loose game files");
         var unarchivedIndex = UnarchivedIndex.Build(gameRoot);
+
+        onStep?.Invoke($"plan: {unarchivedIndex.Count} loose name(s); matching mod files");
 
         var matches = new List<DirectInstallMatch>();
         var unmatched = new List<string>();
@@ -640,9 +654,13 @@ public static class DirectModInstaller
             using (var content = File.OpenRead(modFilePath))
                 content.CopyTo(writeStream);
 
+            // Chunked, not one array the size of the gap. Restoring a small vanilla file into the
+            // slot a large modded one grew to makes this remainder enormous — 27.6 MB was measured
+            // uninstalling a 2.4x texture pack — and that single allocation is what took the process
+            // down on 32-bit. See ZeroFill.
             var remaining = entry.ByteSize - length;
             if (remaining > 0)
-                writeStream.Write(new byte[remaining]);
+                ZeroFill.Write(writeStream, remaining);
 
             // The size field is what the game streams by, so leaving it at the old value makes a
             // smaller replacement cost exactly what the bigger file it replaced did. That is not a

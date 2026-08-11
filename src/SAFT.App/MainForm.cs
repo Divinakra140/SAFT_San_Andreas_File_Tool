@@ -282,12 +282,72 @@ public partial class MainForm : Form
     /// what the player's own game demonstrably handles. Returns false only if the user chooses to
     /// stop. Within-range mods just get an acknowledgement, never a decision.
     /// </summary>
+    /// <summary>
+    /// Holds the user for a minute after an install, before they can go and launch the game.
+    ///
+    /// The wait is real and it was measured, not reasoned about. Writing the archive finishes well
+    /// before an SD card has committed it, and a game launched inside that window opens a
+    /// half-written archive and hangs on a black screen — the "Canton freeze". Flushing to disk at
+    /// the end of the write did NOT close the gap: packs G, J and E all froze on an immediate first
+    /// launch after that change, K did not, N did not after deliberately waiting a minute, and the
+    /// PreRelease pack froze again on an immediate launch. Waiting has never once failed.
+    ///
+    /// The first button is genuinely disabled rather than merely counting, because the informative
+    /// version of this advice already existed in the readme and was read by the person who wrote it,
+    /// who then launched immediately anyway and got the freeze.
+    ///
+    /// The second button is live from the start, and that is the point of having two: the wait only
+    /// matters if the next thing you do is launch the game on Winlator. Anyone carrying on inside
+    /// SAFT touches nothing the card is still writing, and anyone on real Windows never needed the
+    /// wait at all, so neither should be made to sit through a minute that does nothing for them.
+    /// </summary>
+    private void HoldBeforeLaunching()
+    {
+        // Shown in BOTH editions, which took a moment's thought to land on.
+        //
+        // The freeze this prevents is an SD-card write-back still in flight when the game opens the
+        // archive, so what matters is the wall-clock gap between finishing an install and starting
+        // the game. The usual Dev workflow serves that gap for free: install on a Windows machine,
+        // eject the card, carry it to the handheld, boot Winlator - a minute on its own. On that
+        // reading Dev should skip the dialog, and for a while it did.
+        //
+        // But Dev runs under Winlator perfectly well; its extraction tabs are merely slow there, and
+        // nothing stops someone using its Install Mods tab on the handheld and launching seconds
+        // later. That user needs the warning exactly as much as an ordinary user does.
+        //
+        // What settles it is that the countdown only disables the FIRST button. "Dismiss" is live
+        // from the first frame, so anyone who does not need the wait pays one click for it, not a
+        // minute. One click is a cheap price for covering the case that would otherwise look, to the
+        // person it happens to, like SAFT broke their game.
+        const int seconds = 60;
+
+        using var wait = ConfirmDialog.Wait(
+            "If you are on Winlator and about to launch the game, wait 60 seconds for the game to " +
+            "recover from its recent surgery. Rushing into a launch can sometimes cause freezes on " +
+            "the first launch. only time heals some wounds.",
+            "OK",
+            "Dismiss",
+            seconds);
+
+        wait.ShowDialog(this);
+    }
+
     private bool ConfirmStreamingImpact(StreamingVerdict verdict)
     {
         if (!verdict.NeedsConfirmation)
         {
+            // The single-button path, taken only by a Fine verdict — which is to say, only when the
+            // news is good. Until a mod finally came back Fine, no test had ever run this branch.
+            //
+            // Logged either side of the constructor call because ConfirmDialog's own first line runs
+            // in the constructor BODY, after the Form base constructor has already created window
+            // resources. Without this, "died before the dialog" and "died building the window" look
+            // identical in the log: both are simply a missing line.
+            ActivityLog.Note("dialog: about to construct the Fine acknowledgement");
             var ok = ConfirmDialog.Acknowledgement(verdict.Message, "OK", verdict.Severity);
+            ActivityLog.Note("dialog: Fine acknowledgement constructed, showing it");
             ok.ShowDialog(this);
+            ActivityLog.Note("dialog: Fine acknowledgement closed");
             return true;
         }
 
@@ -1022,6 +1082,16 @@ public partial class MainForm : Form
             return;
         }
 
+        // Refused up front rather than discovered later. Backing up into the mod folder quietly
+        // doubles every file in it and there is no sign anything is wrong until an install reports
+        // twice as many replacements as the mod contains.
+        if (FolderAccess.WhyBackupFolderIsUnusable(DirectBackupDestBox.Text, gameFolder, modFolder) is { } why)
+        {
+            ActivityLog.Note($"install: refused backup folder - {why}");
+            MessageBox.Show(why, "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         DirectProgressBar.Value = 0;
         DirectSubProgressBar.Value = 0;
         DirectInstallButton.Enabled = false;
@@ -1046,7 +1116,7 @@ public partial class MainForm : Form
         try
         {
             ActivityLog.Note($"install: planning against {modFolder}");
-            var plan = await Task.Run(() => DirectModInstaller.Plan(gameFolder, modFolder));
+            var plan = await Task.Run(() => DirectModInstaller.Plan(gameFolder, modFolder, ActivityLog.Note));
             ActivityLog.Note($"install: plan has {plan.Matches.Count} archived + {plan.UnarchivedMatches.Count} loose match(es)");
 
             WarnAboutRefusedScripts(plan.RefusedScripts);
@@ -1064,7 +1134,7 @@ public partial class MainForm : Form
             Analysing("Checking how much this mod adds to what your game has to load…");
             var replacementSizes = await Task.Run(() => ReplacementSizes(plan));
             ActivityLog.Note("install: measuring streaming impact");
-            var impact = await Task.Run(() => StreamingImpact.Measure(gameFolder, replacementSizes));
+            var impact = await Task.Run(() => StreamingImpact.Measure(gameFolder, replacementSizes, ActivityLog.Note));
 
             // Full, so the last step reads as finished rather than as stopped three quarters of the
             // way along while the popup is being built.
@@ -1318,6 +1388,8 @@ public partial class MainForm : Form
                     "needs that file to remove them again, so keep it there.");
 
             MessageBox.Show(string.Join("\n", summaryLines), "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            HoldBeforeLaunching();
         }
         catch (Exception ex)
         {
@@ -1401,7 +1473,16 @@ public partial class MainForm : Form
 
         try
         {
-            var plan = await Task.Run(() => DirectModInstaller.Plan(gameFolder, backupFolder));
+            // Breadcrumbs, at the same granularity as the install path. Uninstall had none, so when
+            // it took the process down there was nothing in the log between "opening main window"
+            // and the next session start - no way to tell which step died. The install path's
+            // breadcrumbs are the only reason the peds.ide crash was found in one attempt.
+            ActivityLog.Note($"uninstall: planning against backup folder {backupFolder}");
+            var plan = await Task.Run(() => DirectModInstaller.Plan(gameFolder, backupFolder, ActivityLog.Note));
+            ActivityLog.Note(
+                $"uninstall: plan has {plan.Matches.Count} archived + {plan.UnarchivedMatches.Count} loose + " +
+                $"{plan.AudioMatches.Count} audio + {plan.StreamMatches.Count} stream match(es), " +
+                $"{plan.Ambiguous.Count} ambiguous, rebuild={plan.AnyArchiveNeedsRebuild}");
 
             WarnAboutRefusedScripts(plan.RefusedScripts);
 
@@ -1410,6 +1491,7 @@ public partial class MainForm : Form
             // why it lives here alongside the backed-up originals.
             var additionsManifest = await Task.Run(() => AdditionsManifest.Load(backupFolder));
             var modsToRemove = additionsManifest?.Mods.Select(m => m.Name).ToList() ?? new List<string>();
+            ActivityLog.Note($"uninstall: additions manifest {(additionsManifest is null ? "absent" : "loaded")}, {modsToRemove.Count} mod(s) to remove");
 
             if (modsToRemove.Count > 0)
             {
@@ -1475,7 +1557,9 @@ public partial class MainForm : Form
             });
 
             var modBackupFolder = makeModBackup ? UninstallBackupDestBox.Text : null;
+            ActivityLog.Note($"uninstall: restoring, mod backup {(modBackupFolder is null ? "off" : "to " + modBackupFolder)}");
             var result = await Task.Run(() => DirectModInstaller.Apply(plan, modBackupFolder, progress));
+            ActivityLog.Note($"uninstall: restore finished - {result.Archives.Sum(s => s.FilesReplaced)} entry/entries across {result.Archives.Count} archive(s), {result.Unarchived.Count} loose file(s)");
 
             // Additions come out first: their removal rebuilds the archive, and doing it before the
             // ordinary restores keeps the two from rebuilding the same archive twice.
@@ -1490,8 +1574,10 @@ public partial class MainForm : Form
                     UninstallSubProgressBar.Value = Math.Clamp(p.FilesDone, 0, UninstallSubProgressBar.Maximum);
                 });
 
+                ActivityLog.Note($"uninstall: removing added objects for {modsToRemove.Count} mod(s)");
                 removed = await Task.Run(() =>
                     AdditionUninstaller.Remove(gameFolder, additionsManifest, modsToRemove, removalProgress));
+                ActivityLog.Note($"uninstall: removal finished - {removed.ArchiveEntriesRemoved} asset(s), {removed.DataLinesRemoved} map line(s), {removed.FreedObjectIds.Count} slot(s) freed");
 
                 // The record is rewritten so a later uninstall doesn't try to remove all this again.
                 additionsManifest.Save(backupFolder);

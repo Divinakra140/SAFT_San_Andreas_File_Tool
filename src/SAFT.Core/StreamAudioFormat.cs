@@ -144,8 +144,23 @@ public static class StreamIndex
         var remaining = originalPayloadLength - newPayload.Length;
         if (remaining > 0)
         {
+            // Chunked for the same reason as the archive padding in DirectModInstaller: replacing a
+            // long track with a short one leaves a remainder measured in megabytes, and one array
+            // that size is a Large Object Heap request on a 32-bit heap. The XOR is position
+            // dependent, so each chunk is transformed at its own offset.
             var padPosition = payloadOffset + newPayload.Length;
-            writeStream.Write(StreamXor.Transform(new byte[remaining], padPosition));
+            var buffer = new byte[Math.Min(remaining, 81920)];
+
+            while (remaining > 0)
+            {
+                var chunk = (int)Math.Min(buffer.Length, remaining);
+                Array.Clear(buffer, 0, chunk); // Transform mutates in place, so reset before reuse
+                StreamXor.Transform(buffer.AsSpan(0, chunk), padPosition);
+                writeStream.Write(buffer, 0, chunk);
+
+                padPosition += chunk;
+                remaining -= chunk;
+            }
         }
     }
 

@@ -75,6 +75,30 @@ need this. Whichever route you take, audio must sit in its nested folder structu
 .wav/.ogg files - audio is the only type SAFT identifies by folder rather than by name.
 
 -----------------------------------------------------------------------------------------
+How Uninstalling Actually Works:
+--------------------------------
+
+The Uninstall tab is a sheep in wolf's clothing. It sounds like a big destructive operation and it
+is not one: it copies files out of your backup folder back into your game, matched by filename, and
+that is the whole of it.
+
+Your backup folder is the control, not the tab. SAFT restores whatever it finds in there and nothing
+else, so if you do not want it putting a pile of vanilla files back over vanilla files you already
+have, delete those out of the backup folder and keep only the ones that actually correspond to
+something you modded.
+
+SAFT does not check whether a file needs restoring - if your game already has the vanilla file, SAFT
+writes it over the top anyway. Nothing is harmed, the bytes are identical, but the number it reports
+at the end is how many files it wrote, not how many were actually different.
+
+That is deliberate. SAFT works inside the archives, so checking whether one 1 MB texture needs
+restoring can mean reading 28 MB back off your SD card first. And "restore" is safer meaning this
+file WILL be vanilla when SAFT is done, rather than it will be vanilla if the comparison was right.
+
+If nothing in your backup folder shares a name with anything in your game, SAFT says so and changes
+nothing at all.
+
+-----------------------------------------------------------------------------------------
 Green, Amber and Red: will this mod still render?
 -------------------------------------------------
 

@@ -81,15 +81,28 @@ public static class AdditionScanner
             var fileName = Path.GetFileName(path);
             if (FileFilters.IsIgnoredFile(fileName)) continue;
 
+            // An .ide or .ipl the game ALREADY HAS is a replacement, not an addition manifest, and
+            // its contents describe the game rather than anything being added to it. Reading one as
+            // additions is wrong twice over: it reports objects the game has had all along as new,
+            // and it feeds them into the density maths as extra weight the mod does not add.
+            //
+            // A mod replacing data/peds.ide was read as adding 276 new pedestrians. A mod replacing
+            // cull.ipl had every cull zone in it counted as newly placed. Both are files the user is
+            // swapping wholesale — whatever rows they contain arrive as part of the replacement and
+            // are not SAFT's to install, allocate IDs for, or weigh.
+            var isReplacementOfAGameFile = existsInGame(fileName);
+
             if (fileName.EndsWith(".ide", StringComparison.OrdinalIgnoreCase))
             {
-                definitions.AddRange(SafeParse(() => IdeFile.Parse(path), Array.Empty<IdeDefinition>()));
+                if (!isReplacementOfAGameFile)
+                    definitions.AddRange(SafeParse(() => IdeFile.Parse(path), Array.Empty<IdeDefinition>()));
                 continue;
             }
 
             if (fileName.EndsWith(".ipl", StringComparison.OrdinalIgnoreCase))
             {
-                placements.AddRange(SafeParse(() => IplFile.Parse(path), Array.Empty<IplInstance>()));
+                if (!isReplacementOfAGameFile)
+                    placements.AddRange(SafeParse(() => IplFile.Parse(path), Array.Empty<IplInstance>()));
                 continue;
             }
 
