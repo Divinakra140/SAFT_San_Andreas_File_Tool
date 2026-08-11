@@ -185,13 +185,48 @@ public static class DirectModInstaller
             }
         }
 
-        onStep?.Invoke($"plan: {index.Count} archive entry name(s) indexed; indexing SFX");
-        var audioIndex = BuildAudioIndex(gameRoot);
+        // What the mod actually contains, read once and reused for the matching loop below. This
+        // exists to answer one question before doing any expensive work: does this mod have audio?
+        var modFiles = Directory.EnumerateFiles(modSourceFolder, "*", SearchOption.AllDirectories)
+            .Where(p => !FileFilters.IsIgnoredFile(Path.GetFileName(p)))
+            .ToList();
 
-        onStep?.Invoke($"plan: {audioIndex.Count} SFX slot(s); indexing streamed audio");
-        var streamIndex = BuildStreamIndex(gameRoot);
+        var hasWav = modFiles.Any(p => p.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
+        var hasOgg = modFiles.Any(p => p.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase));
 
-        onStep?.Invoke($"plan: {streamIndex.Count} track(s); indexing loose game files");
+        // Indexing the game's sound slots means seeking through nine packages and reading the header
+        // of every bank in each - 61,993 slots on a stock game - and it was being done on every plan
+        // regardless of what the mod held. A mod containing one .dff paid the entire cost for an
+        // index nothing would ever look at. On an SD card under Winlator that is not merely wasteful:
+        // one run sat in this loop for over half an hour while another finished it in 2.2 seconds.
+        // Skipped entirely unless the mod actually has audio to match.
+        Dictionary<string, AudioSlot> audioIndex;
+        if (hasWav)
+        {
+            onStep?.Invoke($"plan: {index.Count} archive entry name(s) indexed; mod has .wav files, indexing SFX");
+            audioIndex = BuildAudioIndex(gameRoot, onStep);
+            onStep?.Invoke($"plan: {audioIndex.Count} SFX slot(s) indexed");
+        }
+        else
+        {
+            audioIndex = new Dictionary<string, AudioSlot>(StringComparer.OrdinalIgnoreCase);
+            onStep?.Invoke($"plan: {index.Count} archive entry name(s) indexed; mod has no .wav files, skipping SFX index");
+        }
+
+        Dictionary<string, StreamSlot> streamIndex;
+        if (hasOgg)
+        {
+            onStep?.Invoke("plan: mod has .ogg files, indexing streamed audio");
+            streamIndex = BuildStreamIndex(gameRoot);
+            onStep?.Invoke($"plan: {streamIndex.Count} track(s) indexed");
+        }
+        else
+        {
+            streamIndex = new Dictionary<string, StreamSlot>(StringComparer.OrdinalIgnoreCase);
+            onStep?.Invoke("plan: mod has no .ogg files, skipping streamed audio index");
+        }
+
+        onStep?.Invoke("plan: indexing loose game files");
         var unarchivedIndex = UnarchivedIndex.Build(gameRoot);
 
         onStep?.Invoke($"plan: {unarchivedIndex.Count} loose name(s); matching mod files");
@@ -206,10 +241,9 @@ public static class DirectModInstaller
         var ambiguous = new List<DirectAmbiguousMatch>();
         var refusedScripts = new List<RefusedScript>();
 
-        foreach (var sourcePath in Directory.EnumerateFiles(modSourceFolder, "*", SearchOption.AllDirectories))
+        foreach (var sourcePath in modFiles)
         {
             var fileName = Path.GetFileName(sourcePath);
-            if (FileFilters.IsIgnoredFile(fileName)) continue;
 
             // Game scripts are refused outright, archived or not — see FileFilters.IsGameScriptFile
             // for why. Reported separately from "unmatched" so the app can explain the refusal
@@ -342,11 +376,22 @@ public static class DirectModInstaller
     private sealed record AudioSlot(
         SfxPackage Package, string PackageRelativePath, long BankHeaderOffset, long BankLength, int SoundIndex, long OriginalPcmLength);
 
-    private static Dictionary<string, AudioSlot> BuildAudioIndex(string gameRoot)
+    /// <summary>
+    /// Indexes every sound slot in the game. <paramref name="onStep"/> reports per package because a
+    /// run stalled inside here for 34 minutes, while another did the identical work in 2.2 seconds -
+    /// and a single breadcrumb around the whole loop could not say which of the nine packages it was
+    /// in, or whether it was making progress at all.
+    /// </summary>
+    private static Dictionary<string, AudioSlot> BuildAudioIndex(string gameRoot, Action<string>? onStep = null)
     {
         var index = new Dictionary<string, AudioSlot>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pkg in SfxIndex.Load(gameRoot))
+        var packages = SfxIndex.Load(gameRoot);
+        var packageNumber = 0;
+
+        foreach (var pkg in packages)
         {
+            packageNumber++;
+            onStep?.Invoke($"plan: sfx package {packageNumber}/{packages.Count} {pkg.Name} ({pkg.Banks.Count} banks)");
             using var stream = File.OpenRead(pkg.AbsolutePath);
             var packageRelativePath = Path.GetRelativePath(gameRoot, pkg.AbsolutePath);
 

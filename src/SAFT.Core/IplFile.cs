@@ -28,7 +28,7 @@ public static class IplFile
     private const string InstanceSection = "inst";
 
     public static IReadOnlyList<IplInstance> Parse(string path) =>
-        ParseLines(File.ReadAllLines(path));
+        ParseLines(File.ReadLines(path));
 
     public static IReadOnlyList<IplInstance> ParseLines(IEnumerable<string> lines)
     {
@@ -50,8 +50,24 @@ public static class IplFile
 
             if (line.Equals("end", StringComparison.OrdinalIgnoreCase))
             {
-                inInstanceSection = false;
-                continue;
+                // Stop reading the file entirely, rather than carrying on looking for a second inst
+                // section that no .ipl has.
+                //
+                // This is not a micro-optimisation, it is the difference between SAFT working and
+                // hanging. Callers pass File.ReadLines, which reads lazily, so breaking here means
+                // the rest of the file is never pulled off the disk at all. The five paths*.ipl
+                // files are 8.1 MB between them and their inst sections are EMPTY - three lines each
+                // - because they hold path-node data, not placements. Across all 54 files SAFT was
+                // reading 9,129,300 bytes to use 789,348 of them: 91.4% waste, every single install.
+                //
+                // On an SD card under Winlator that was not merely slow. An install run moments after
+                // an uninstall had written to the same card stopped dead on paths.ipl, file 38 of 54,
+                // having read the previous 37 in 300 milliseconds. The card was still committing the
+                // uninstall's writes and a 2.6 MB read queued behind them.
+                //
+                // The IPL format has one section per type and no Rockstar file breaks that; a second
+                // inst section would be malformed. Verified across all 54 files in a stock install.
+                break;
             }
 
             // id, model, interior, x, y, z, rotX, rotY, rotZ, rotW, lod

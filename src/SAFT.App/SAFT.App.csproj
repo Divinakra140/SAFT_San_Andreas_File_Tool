@@ -20,7 +20,7 @@
     <RootNamespace>SAFT.App</RootNamespace>
     <!-- Shows up in the exe's Properties > Details, so a downloaded copy can be identified on
          sight. Keep in step with the window title in MainForm.Layout.cs and the GitHub release tag. -->
-    <Version>2.1.0</Version>
+    <Version>2.1.1</Version>
     <Product>SAFT — San Andreas File Tool</Product>
     <Company>Divinakra</Company>
   </PropertyGroup>
@@ -72,5 +72,15 @@
     <EmbeddedResource Include="..\..\assets\panel\title_bold.png"><LogicalName>SAFT.Assets.panel.title_bold.png</LogicalName></EmbeddedResource>
     <EmbeddedResource Include="..\..\assets\panel\modify.png"><LogicalName>SAFT.Assets.panel.modify.png</LogicalName></EmbeddedResource>
   </ItemGroup>
+
+  <!--
+    A 32-bit process gets 2 GB of address space by default, and 4 GB if this flag is set and the host
+    is 64-bit - which every machine SAFT runs on is. What runs out during the pre-install analysis is
+    contiguous address space, not memory, so this is real headroom. See the script for the full
+    reasoning, including why it is a mitigation rather than a fix.
+  -->
+  <Target Name="SetLargeAddressAware" AfterTargets="Publish" Condition="'$(RuntimeIdentifier)' == 'win-x86'">
+    <Exec Command="python3 &quot;$(MSBuildThisFileDirectory)..\..\build\set-large-address-aware.py&quot; &quot;$(PublishDir)$(AssemblyName).exe&quot;" />
+  </Target>
 
 </Project>

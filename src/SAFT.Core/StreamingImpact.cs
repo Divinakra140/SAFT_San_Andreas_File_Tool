@@ -58,17 +58,18 @@ public static class StreamingImpact
     /// no way to tell which phase it died in.
     /// </summary>
     public static StreamingImpactReport Measure(
-        string gameRoot, IReadOnlyDictionary<string, long> replacementSizes, Action<string>? onStep = null)
+        string gameRoot, IReadOnlyDictionary<string, long> replacementSizes, Action<string>? onStep = null,
+        GameSnapshot? snapshot = null)
     {
-        onStep?.Invoke("measure: reading definitions");
-        // Read once and handed to everything below. This method used to parse the .ide files three
-        // separate times - here, inside WeighGameAssets, and again for the id-to-name map - and it is
-        // the most expensive step there is, so on an SD card that was most of the wait before the
-        // first popup.
-        var definitions = PlacementDensity.ReadDefinitions(gameRoot);
+        // Handed the map when the caller already read it, which is the whole point of GameSnapshot:
+        // this method and AdditionScanner used to read the entire game independently, for the same
+        // answer, at roughly 85 MB of allocation each. Falls back to reading it itself so the method
+        // still stands alone.
+        snapshot ??= GameSnapshot.Read(gameRoot, onStep);
 
-        onStep?.Invoke($"measure: {definitions.Count:N0} definition(s); weighing game assets");
-        var before = PlacementDensity.WeighGameAssets(gameRoot, definitions);
+        var definitions = snapshot.Definitions;
+        var before = snapshot.Weights;
+        var placements = snapshot.Placements;
         var after = new Dictionary<string, ModelWeight>(before, StringComparer.OrdinalIgnoreCase);
 
         var replacedPlaced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -94,25 +95,9 @@ public static class StreamingImpact
             else if (PlacedSections.Contains(definition.Section)) replacedPlaced.Add(definition.ModelName);
         }
 
-        onStep?.Invoke($"measure: {before.Count:N0} weighted model(s); parsing text .ipl files");
-        var placements = new List<IplInstance>();
-        foreach (var path in IplFile.FindAll(gameRoot))
-        {
-            try { placements.AddRange(IplFile.Parse(path)); }
-            catch { /* as above */ }
-        }
-
-        // The binary .ipl files inside the archives carry about four fifths of the map. Leaving them
-        // out here put "the heaviest area of your map" at 8.6 MB in this report while the density
-        // baseline, which does read them, called the same game 32.0 MB - two different answers to
-        // the same question in one popup.
-        onStep?.Invoke($"measure: {placements.Count:N0} text placement(s); reading binary .ipl from archives");
-        var namesById = PlacementDensity.ModelNamesById(definitions);
-        placements.AddRange(BinaryIplFile.ReadAllFromGame(
-            gameRoot, id => namesById.TryGetValue(id, out var name) ? name : string.Empty));
-
-        onStep?.Invoke($"measure: {placements.Count:N0} placement(s) total; weighing the map as it is now");
-        var heaviestBefore = HeaviestArea(placements, before);
+        // Already known: the snapshot measured the game as it stands. Recomputing it would be a
+        // third full pass over 50,982 placements for a number we are holding.
+        var heaviestBefore = snapshot.Baseline.BusiestBytes;
 
         onStep?.Invoke($"measure: heaviest area now {heaviestBefore / 1048576.0:N1} MB; weighing it with the mod applied");
         var heaviestAfter = HeaviestArea(placements, after);
@@ -127,18 +112,13 @@ public static class StreamingImpact
             replacedDynamic.Count);
     }
 
-    private static long HeaviestArea(IReadOnlyList<IplInstance> placements, IReadOnlyDictionary<string, ModelWeight> weights)
-    {
-        long heaviest = 0;
-        foreach (var cell in placements.GroupBy(p =>
-                     ((long)Math.Floor(p.X / PlacementDensity.AreaSizeUnits),
-                      (long)Math.Floor(p.Y / PlacementDensity.AreaSizeUnits))))
-        {
-            var densest = PlacementDensity.FindDensest(cell, weights);
-            if (densest is not null && densest.Bytes > heaviest) heaviest = densest.Bytes;
-        }
-        return heaviest;
-    }
+    /// <summary>
+    /// Heaviest single area of map, in bytes. One pass over the placements - see
+    /// PlacementDensity.HeaviestCellBytes for why grouping first and asking per cell was the thing
+    /// generating almost all of SAFT's allocation churn.
+    /// </summary>
+    private static long HeaviestArea(IReadOnlyList<IplInstance> placements, IReadOnlyDictionary<string, ModelWeight> weights) =>
+        PlacementDensity.HeaviestCellBytes(placements, weights);
 
     /// <summary>
     /// Total weight of everything the game spawns rather than places. Each model and each texture

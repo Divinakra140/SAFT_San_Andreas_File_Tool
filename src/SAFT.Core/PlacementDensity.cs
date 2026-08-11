@@ -106,6 +106,69 @@ public static class PlacementDensity
             return map;
         });
 
+    private static (long, long) CellKey(IplInstance p) =>
+        ((long)Math.Floor(p.X / AreaSizeUnits), (long)Math.Floor(p.Y / AreaSizeUnits));
+
+    /// <summary>
+    /// The heaviest single cell in bytes, over the whole map, in ONE pass.
+    ///
+    /// This replaces "group the placements into cells, then ask FindDensest about each cell in turn".
+    /// That read reasonably but cost enormously: the map is 869 cells, so it meant 869 calls, each
+    /// allocating three dictionaries and a set of HashSets and running a LINQ sort over a collection
+    /// of one, and it happened four times per install. Measured at 200 MB of allocation churn per
+    /// analysis on a 32-bit process with a 2 GB address space and a Large Object Heap that is never
+    /// compacted - which is how an app holding 30 MB live can still fail to find room, intermittently,
+    /// depending only on how the previous run happened to leave the heap.
+    ///
+    /// Same arithmetic as <see cref="FindDensest"/>'s byte total, deliberately: distinct models per
+    /// cell plus distinct texture dictionaries per cell, each counted once however many placements
+    /// share them. Cells holding nothing that is in <paramref name="weights"/> total zero and so
+    /// cannot win, which is why they are never added.
+    /// </summary>
+    public static long HeaviestCellBytes(
+        IEnumerable<IplInstance> placements, IReadOnlyDictionary<string, ModelWeight>? weights)
+    {
+        if (weights is null) return 0;
+
+        var modelsPerCell = new Dictionary<(long, long), HashSet<string>>();
+        var texturesPerCell = new Dictionary<(long, long), HashSet<string>>();
+
+        foreach (var p in placements)
+        {
+            if (!weights.TryGetValue(p.ModelName, out var weight)) continue;
+
+            var key = CellKey(p);
+
+            if (!modelsPerCell.TryGetValue(key, out var models))
+                modelsPerCell[key] = models = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            models.Add(weight.ModelName);
+
+            if (string.IsNullOrEmpty(weight.TextureName)) continue;
+
+            if (!texturesPerCell.TryGetValue(key, out var textures))
+                texturesPerCell[key] = textures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            textures.Add(weight.TextureName);
+        }
+
+        var textureBytes = TextureBytesFor(weights);
+        long heaviest = 0;
+
+        foreach (var (key, models) in modelsPerCell)
+        {
+            long total = 0;
+            foreach (var name in models)
+                if (weights.TryGetValue(name, out var w)) total += w.ModelBytes;
+
+            if (texturesPerCell.TryGetValue(key, out var textures))
+                foreach (var name in textures)
+                    if (textureBytes.TryGetValue(name, out var bytes)) total += bytes;
+
+            if (total > heaviest) heaviest = total;
+        }
+
+        return heaviest;
+    }
+
     /// <summary>
     /// Busiest cell produced by a set of placements, or null if there are none. Pass
     /// <paramref name="weights"/> to also total the bytes an area would have to stream; without it
@@ -244,19 +307,8 @@ public static class PlacementDensity
     }
 
     private static long HeaviestAreaBytes(
-        IReadOnlyList<IplInstance> placements, IReadOnlyDictionary<string, ModelWeight> weights)
-    {
-        var byCell = placements
-            .GroupBy(p => ((long)Math.Floor(p.X / AreaSizeUnits), (long)Math.Floor(p.Y / AreaSizeUnits)));
-
-        long heaviest = 0;
-        foreach (var cell in byCell)
-        {
-            var densest = FindDensest(cell, weights);
-            if (densest is not null && densest.Bytes > heaviest) heaviest = densest.Bytes;
-        }
-        return heaviest;
-    }
+        IReadOnlyList<IplInstance> placements, IReadOnlyDictionary<string, ModelWeight> weights) =>
+        HeaviestCellBytes(placements, weights);
 
     /// <summary>
     /// What every object already in the game costs to stream, taken from the real sizes of its

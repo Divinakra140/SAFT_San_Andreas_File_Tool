@@ -47,7 +47,7 @@ public static class IdeFile
     };
 
     public static IReadOnlyList<IdeDefinition> Parse(string path) =>
-        ParseLines(File.ReadAllLines(path));
+        ParseLines(File.ReadLines(path));
 
     public static IReadOnlyList<IdeDefinition> ParseLines(IEnumerable<string> lines)
     {

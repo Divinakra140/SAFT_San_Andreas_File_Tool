@@ -1124,17 +1124,26 @@ public partial class MainForm : Form
             // Everything the game already has, so the scanner can tell an addition from a replacement.
             Analysing("Checking what your game already has…");
             var existing = await Task.Run(() => GameFileNames(gameFolder));
+
+            // The game's own map, read ONCE and handed to both the addition scanner and the streaming
+            // measurement. They each used to read it independently — all 60 .ide files, all 54 text
+            // .ipl files and every binary .ipl inside the archives — for the same answer, at about
+            // 85 MB of allocation each. In a 32-bit process whose Large Object Heap is never
+            // compacted, that second pass was allocating into the holes left by the first, and the
+            // crash that followed was the allocator failing to find contiguous room rather than the
+            // machine running out of memory. See GameSnapshot.
+            var gameMap = await Task.Run(() => GameSnapshot.Read(gameFolder, ActivityLog.Note));
             ActivityLog.Note($"install: game holds {existing.Count} known file name(s); scanning for additions");
 
             Analysing("Checking what this mod adds…");
-            var additions = await Task.Run(() => AdditionScanner.Scan(gameFolder, modFolder, existing.Contains));
+            var additions = await Task.Run(() => AdditionScanner.Scan(gameFolder, modFolder, existing.Contains, gameMap.Baseline));
 
             // What the mod does to the streaming budget — this applies to replacement-only mods too,
             // which is where an over-heavy pack quietly stops the world rendering.
             Analysing("Checking how much this mod adds to what your game has to load…");
             var replacementSizes = await Task.Run(() => ReplacementSizes(plan));
             ActivityLog.Note("install: measuring streaming impact");
-            var impact = await Task.Run(() => StreamingImpact.Measure(gameFolder, replacementSizes, ActivityLog.Note));
+            var impact = await Task.Run(() => StreamingImpact.Measure(gameFolder, replacementSizes, ActivityLog.Note, gameMap));
 
             // Full, so the last step reads as finished rather than as stopped three quarters of the
             // way along while the popup is being built.

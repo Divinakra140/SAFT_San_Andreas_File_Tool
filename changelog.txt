@@ -341,3 +341,60 @@ memory in use on every line. Three of the four crashes above were located from t
 guessed at, and the phases that had no breadcrumbs are exactly the ones that took longest to find.
 
 - Divinakra
+
+
+===================================================================================================
+CHANGELOG 2.1.1 - The one that was making SAFT freeze
+===================================================================================================
+
+2.1 fixed four ways SAFT could close itself. It did not fix a fifth problem, because at the time
+nobody knew what it was: SAFT would sometimes freeze while checking a mod, most reliably if you had
+just uninstalled something. This is that.
+
+
+What it was
+-----------
+Before installing anything, SAFT reads your game's map to work out how heavy the mod will make it.
+Part of that means reading the .ipl files, the lists of where every object sits in the world.
+
+It was reading all of every one of them. Across the 54 files that is 9,129,300 bytes, of which
+789,348 were actually wanted - 91% waste on every single install. The worst offenders are the five
+paths .ipl files: 8.1 MB between them, and the part SAFT needs from each is three lines long. They
+hold road and pavement network data, not object placements, so there was nothing in the other 8.1 MB
+for SAFT to find.
+
+That was merely wasteful until you uninstalled a mod. Uninstalling writes a lot to your SD card, and
+cards keep accepting writes long after they report being finished. Ask one to hand back 2.6 MB while
+it is still busy committing and it can simply stop responding - which is what a freeze looks like
+from the outside. SAFT was stopping dead on paths.ipl, having read the 37 files before it in three
+tenths of a second.
+
+SAFT now stops reading each .ipl once it has what it came for. paths.ipl went from freezing the app
+to taking two milliseconds.
+
+
+Faster and lighter everywhere
+-----------------------------
+Chasing the freeze turned up a lot of work that did not need doing:
+
+- The game's map was being read TWICE per install, by two parts of SAFT that did not know about each
+  other. It is read once now.
+- SAFT indexed all 61,993 of the game's sound slots on every install, even for a mod containing no
+  audio at all. It only does that now if your mod actually has sounds in it.
+- Measuring the heaviest area of the map was rebuilding the same table 869 times, once per area.
+- SAFT is a 32-bit program, which normally means it may only use 2 GB of memory addresses however
+  much your machine has. It now tells Windows it can handle 4 GB, which every 64-bit machine and
+  every Android handheld will honour.
+
+Together these cut the memory SAFT churns through on an install from 194 MB to 49 MB, and roughly
+halved how long the checks take. None of it changes a single number SAFT reports.
+
+
+Better at explaining itself
+---------------------------
+saft-activity-log.txt now records every phase of planning, map-reading and uninstalling by name, with
+the memory in use on each line - and names each .ipl file as it reads it. That last detail is what
+found this bug after several wrong theories. If SAFT ever does misbehave, that file is the thing to
+send.
+
+- Divinakra

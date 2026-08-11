@@ -17,8 +17,17 @@ internal static class Program
         Path.GetDirectoryName(Environment.ProcessPath ?? AppContext.BaseDirectory) ?? AppContext.BaseDirectory;
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        // Headless diagnostic path, before any UI exists. Runs the read-only analysis in a loop and
+        // reports what the heap is doing, to answer why scanning crashes when installing never does.
+        // See SelfTest. Deliberately not reachable from the UI - it is a tool, not a feature.
+        if (args.Length > 0 && args[0].Equals("--selftest", StringComparison.OrdinalIgnoreCase))
+        {
+            Environment.Exit(SelfTest.Run(args));
+            return;
+        }
+
         // A crash that closes the window with no message is the hardest thing to act on, and under
         // an emulated environment it is also the most likely: the parts of Windows that WinForms
         // leans on are exactly the parts most likely to behave differently there. These handlers

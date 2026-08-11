@@ -44,7 +44,7 @@ public partial class MainForm
         // The build time is in the title so there is never any doubt about which exe is running. A
         // whole round of testing was spent unsure whether a fix was even in the copy being launched.
         var built = File.GetLastWriteTime(Environment.ProcessPath ?? AppContext.BaseDirectory);
-        Text = $"{Edition.Name} 2.1 — {Edition.Tagline}   [build {built:yyyy-MM-dd HH:mm}]";
+        Text = $"{Edition.Name} 2.1.1 — {Edition.Tagline}   [build {built:yyyy-MM-dd HH:mm}]";
         Width = 1040;
         Height = 760;
         MinimumSize = new Size(880, 600);
