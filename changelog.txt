@@ -398,3 +398,111 @@ found this bug after several wrong theories. If SAFT ever does misbehave, that f
 send.
 
 - Divinakra
+
+
+===================================================================================================
+CHANGELOG 2.1.2 - Reinstalling a mod, and the freeze that was left over
+===================================================================================================
+
+2.1.1 fixed the freeze that came from reading the map. A second one was still there: sometimes SAFT
+would hang during the checks it runs before an install, and sometimes it would not, and nothing about
+which times it did ever made sense. This release is that one, plus the slowest thing SAFT still did.
+
+
+Reinstalling wrote your archive twice
+-------------------------------------
+Installing a mod over a copy of itself is the ordinary way to update one, and SAFT already handled it
+properly: it removes the old copy first, so you end up with the mod installed once rather than twice
+under two sets of object slots.
+
+What it did badly was the cost. models/gta3.img is about 940 MB, and there is no way to add or remove
+an entry inside an archive in place - the directory table sits at the front, so every offset after it
+moves. Both halves of a reinstall therefore rebuilt the entire archive: once to take the old copy out,
+once to put the new copy in. Three times, if the mod also replaced a file too large to patch in place.
+On a phone writing to an SD card, that is several minutes of writing to change seven entries.
+
+It is one rebuild now. The removal works out everything it would have taken out - the old entries, and
+the old collision records sitting inside a shared bundle - and hands that to the pass that writes the
+new copy, which drops them on the way past. Everything else the removal does is unchanged: your map
+lines come out, the object slots are freed, and anything you have changed since installing is still
+left alone rather than deleted.
+
+The order inside that single pass matters more than it looks. A mod's collision records go into a
+bundle the game keeps loaded, and the old copy's records have exactly the same names as the new ones.
+Take the old ones out first and the new ones go in cleanly. Do it the other way round and the new
+records look like duplicates of records that are about to be deleted, and the mod ends up with no
+collision at all - which crashes San Andreas the moment you get near the object.
+
+
+The freeze in the checks
+------------------------
+Before installing, SAFT lists every file in your game folder. That listing was being built twice
+inside a single step: one part of SAFT walked your game folder, then handed the job to another part
+that walked it again for the same answer. On a desktop nobody would notice. Under Winlator, every
+directory listing goes through Wine's filesystem translation onto Android's storage stack and out to
+an SD card, and it is inside exactly that walk that SAFT twice stopped dead.
+
+It walks once now. Combined with the archive being written once instead of twice, the checks were run
+ten times in a row on a real device with three reinstalls among them and did not hang once, where
+before it was a matter of when. Every listing took between 0.37 and 1.07 seconds; the run before this
+change took 7.2 seconds for the same 425 files.
+
+Being honest about it: this is a bug that has now failed to happen, not a bug anyone has explained.
+SAFT does less of the thing it used to hang inside, so it hangs less. If it ever does it to you, send
+saft-activity-log.txt - it now times the folder listing and names any single folder that takes longer
+than it should.
+
+
+Your SD card, and why everything goes slow after a big install
+--------------------------------------------------------------
+This one turned out not to be a SAFT bug at all, and understanding it explained something that had
+been a mystery since 1.0.
+
+Installing a mod writes a lot of data. An SD card takes writes quickly into a small fast buffer, and
+once that buffer fills it has to erase space before it can accept any more - and erasing is the
+slowest thing flash memory does, a thousand times slower than reading. The card keeps doing that
+clean-up in the background long after SAFT has finished, and while it does, everything else using
+that card waits behind it.
+
+Measured on a real device: six archive rebuilds at 28 to 40 seconds each, and then the seventh took
+183 seconds for exactly the same work. Listing the game folder went from 300 milliseconds to over ten
+seconds for the same 425 files. Winlator's own file browser was crawling too, with SAFT closed.
+
+So SAFT now measures how fast your writes are actually landing, and tells you at the end of an
+install if your card has slowed right down - what happened, why, and how long to leave it alone. It
+only speaks up when the drive is genuinely struggling, not when it is merely unremarkable.
+
+This is also the answer to the 60 second timer that has been there since 1.0. That wait was arrived
+at by noticing that a game launched immediately after an install would sometimes freeze, and one
+launched a minute later never did. It was right, and now it says why - and there is a section in the
+README explaining the whole thing.
+
+
+Fewer things asked of your device, everywhere
+---------------------------------------------
+Most of this release is SAFT doing less work rather than doing it faster. On a phone, every file
+opened and every folder listed goes through an emulation layer and out to an SD card, and that is
+where SAFT has historically stopped responding.
+
+- The mod folder was being read five times over during one install. It is read once now.
+- Removing a mod opened your 940 MB archive once for EVERY file it had to check - seven times over to
+  check seven files. Once now.
+- Weighing your game, planning an install and listing what your game already has each opened all
+  eight archives to read a small table out of the front of them. They no longer open the archives at
+  all for that.
+- Reinstalling re-read the whole list of what your game contains, immediately after having read it.
+- Every popup asked the operating system where the mouse cursor was and which monitor it was on.
+  Asked once per run now.
+
+None of this changes a single thing SAFT reports or writes. It is all work that never needed doing.
+
+
+Tidying up
+----------
+The temporary diagnostic logs are gone. While the crashes above were being chased, SAFT wrote a
+saft-diagnostic-log.txt into six different folders inside your game directory. Those were for
+debugging and had no business being in a release - SAFT should never leave files in your game folder
+that are not part of your game. saft-activity-log.txt, which lives next to SAFT.exe and is the file
+worth sending if anything goes wrong, stays exactly as it was.
+
+- Divinakra

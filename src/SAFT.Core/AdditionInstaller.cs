@@ -44,11 +44,27 @@ public static class AdditionInstaller
     /// </summary>
     public const string SharedCollisionBundle = "multiobj.col";
 
+    /// <param name="archiveReplacements">
+    /// Entry name -> file to write into it. Files the direct installer would otherwise have rebuilt
+    /// the whole archive for on its own, folded into this one rewrite.
+    /// </param>
+    /// <param name="entriesToDrop">
+    /// Entries to leave OUT of the rebuilt archive — the previously installed copy of this mod, when
+    /// this is a reinstall. Handed over by <see cref="AdditionUninstaller.Remove"/> so that removing
+    /// the old copy and adding the new one cost one rewrite between them rather than one each.
+    /// </param>
+    /// <param name="collisionRecordsToPrune">
+    /// Bundle name -> record names to take out of it, the collision half of the same handover.
+    /// </param>
     public static AdditionInstallResult Apply(
         string gameRoot,
         AdditionPlan plan,
         string modName,
-        IProgress<AdditionProgress>? progress = null)
+        IProgress<AdditionProgress>? progress = null,
+        IReadOnlyDictionary<string, string>? archiveReplacements = null,
+        IReadOnlySet<string>? entriesToDrop = null,
+        IReadOnlyDictionary<string, IReadOnlySet<string>>? collisionRecordsToPrune = null,
+        StorageSpeed? speed = null)
     {
         // Throttled at the door, so every progress?.Report below it - including the ones passed
         // down into the private helpers - costs a UI round trip ten times a second rather than
@@ -67,10 +83,15 @@ public static class AdditionInstaller
             ObjectIds = allocated.ToList(),
         };
 
-        AppendAssetsToArchive(gameRoot, plan, record, progress);
+        var notes = AppendAssetsToArchive(
+            gameRoot, plan, record, progress, archiveReplacements, entriesToDrop, collisionRecordsToPrune, speed);
         WriteMapData(gameRoot, rewritten, record, progress);
 
-        return new AdditionInstallResult(record, rewritten.Problems);
+        // Anything the handed-over removal couldn't do is reported alongside the addition's own
+        // problems rather than being swallowed — it is the uninstaller's "skipped" list arriving by
+        // a different route.
+        var problems = notes.Count == 0 ? rewritten.Problems : rewritten.Problems.Concat(notes).ToList();
+        return new AdditionInstallResult(record, problems);
     }
 
     /// <summary>
@@ -78,9 +99,14 @@ public static class AdditionInstaller
     /// entry in place — the directory table sits at the front and every offset after it would shift
     /// — so this is a full rebuild, which is why adding is slower than replacing.
     /// </summary>
-    private static void AppendAssetsToArchive(
-        string gameRoot, AdditionPlan plan, AddedMod record, IProgress<AdditionProgress>? progress)
+    private static IReadOnlyList<string> AppendAssetsToArchive(
+        string gameRoot, AdditionPlan plan, AddedMod record, IProgress<AdditionProgress>? progress,
+        IReadOnlyDictionary<string, string>? archiveReplacements = null,
+        IReadOnlySet<string>? entriesToDrop = null,
+        IReadOnlyDictionary<string, IReadOnlySet<string>>? collisionRecordsToPrune = null,
+        StorageSpeed? speed = null)
     {
+        var notes = new List<string>();
         var archivePath = Path.Combine(gameRoot, DefaultArchiveRelativePath);
         if (!File.Exists(archivePath)) throw new FileNotFoundException($"'{archivePath}' was not found.", archivePath);
 
@@ -92,10 +118,22 @@ public static class AdditionInstaller
             .Where(a => a.FileName.EndsWith(".dff", StringComparison.OrdinalIgnoreCase)
                      || a.FileName.EndsWith(".txd", StringComparison.OrdinalIgnoreCase))
             .ToList();
-        if (assets.Count == 0 && plan.Collision.Count == 0) return;
+        // Replacements handed over by the direct installer count as work to do here, even when the
+        // mod adds no assets of its own — skipping out early would silently drop them.
+        var replacements = archiveReplacements ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Same for a reinstall's handed-over removals: they are the whole reason this rewrite is
+        // happening when the new copy of the mod adds nothing the old one didn't. Leaving them out of
+        // this test would drop the removal on the floor and leave the old copy installed.
+        var drops = entriesToDrop ?? (IReadOnlySet<string>)new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var prunes = collisionRecordsToPrune
+                     ?? new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
+        if (assets.Count == 0 && plan.Collision.Count == 0 && replacements.Count == 0
+            && drops.Count == 0 && prunes.Count == 0) return notes;
 
         var files = new List<(string Name, Func<Stream> OpenContent)>();
         var rebuiltPath = archivePath + ".saft-tmp";
+        var dropped = 0;
+        var bundleChanged = false;
 
         // The old archive stays OPEN while the new one is written, and every entry is streamed
         // straight across. It used to be copied out to the system temp folder first, on the theory
@@ -111,13 +149,50 @@ public static class AdditionInstaller
         {
             foreach (var entry in existing.Entries)
             {
+                var merging = plan.Collision.Count > 0 &&
+                              entry.Name.Equals(SharedCollisionBundle, StringComparison.OrdinalIgnoreCase);
+                var pruning = prunes.TryGetValue(entry.Name, out var recordsToPrune);
+
                 // The merged collision bundle is small enough to hold in memory, which keeps the
                 // whole job to ONE rebuild rather than a second pass for collision.
-                if (plan.Collision.Count > 0 &&
-                    entry.Name.Equals(SharedCollisionBundle, StringComparison.OrdinalIgnoreCase))
+                if (merging || pruning)
                 {
-                    var merged = MergeCollision(existing, entry, plan.Collision, record);
-                    files.Add((entry.Name, () => new MemoryStream(merged, writable: false)));
+                    var before = AdditionUninstaller.ReadEntry(existing, entry);
+                    var bundle = before;
+
+                    // ORDER MATTERS, and it is the one real hazard in the reinstall fold. A reinstall
+                    // prunes the old copy's records and merges the new copy's records into the same
+                    // bundle, and the two sets have the SAME NAMES. Merge first and every new record
+                    // looks like a duplicate of one already there, so nothing is added — and then the
+                    // prune takes the old ones out, leaving the mod with no collision at all and
+                    // every placed object crashing the game on load. Pruning first is what makes the
+                    // merge see a bundle the mod is genuinely absent from.
+                    if (pruning)
+                    {
+                        bundle = AdditionUninstaller.PruneCollision(
+                            bundle, entry.Name, recordsToPrune!, notes, out _);
+                    }
+                    if (merging) bundle = MergeCollision(bundle, entry.Name, plan.Collision, record);
+
+                    if (!ReferenceEquals(bundle, before)) bundleChanged = true;
+                    files.Add((entry.Name, () => new MemoryStream(bundle, writable: false)));
+                }
+                else if (replacements.TryGetValue(entry.Name, out var replacementPath))
+                {
+                    // A file the direct installer would otherwise have rewritten this whole archive
+                    // for on its own. Streamed from the mod folder as this one rebuild goes past.
+                    //
+                    // Checked BEFORE the drop below: an entry that is being written with new content
+                    // is not one to delete. In practice the caller sorts this out first — a name in
+                    // both sets is either re-added as an addition or kept as a replacement, never
+                    // handed over as both — but if it ever were, keeping the file beats losing it.
+                    files.Add((entry.Name, () => File.OpenRead(replacementPath)));
+                }
+                else if (drops.Contains(entry.Name))
+                {
+                    // The previously installed copy. Left out of the rebuild, which is how removal
+                    // works here too — an archive has no way to excise an entry in place.
+                    dropped++;
                 }
                 else
                 {
@@ -125,6 +200,13 @@ public static class AdditionInstaller
                     files.Add((entry.Name, () => existing.OpenEntry(carried)));
                 }
             }
+
+            // Nothing this rewrite was asked to do turned out to be a change: the entries handed over
+            // for removal had already gone, and the records to prune with them. Writing 940 MB to
+            // produce a byte-identical archive is the most expensive kind of nothing, so don't — the
+            // uninstaller has always had the same guard on its own rebuild.
+            if (assets.Count == 0 && replacements.Count == 0 && dropped == 0 && !bundleChanged)
+                return notes;
 
             foreach (var asset in assets)
             {
@@ -139,12 +221,14 @@ public static class AdditionInstaller
 
             ImgArchive.Write(rebuiltPath, files,
                 (done, total) => progress?.Report(new AdditionProgress("Adding assets to the archive", done, total)),
-                (done, total) => progress?.Report(new AdditionProgress("Reading the existing archive", done, total)));
+                (done, total) => progress?.Report(new AdditionProgress("Reading the existing archive", done, total)),
+                speed is null ? null : speed.Sample);
         }
 
         // Swapped only after the source archive is closed: the crash-safe rename needs both files
         // free. The original is renamed aside, never deleted, and restored if anything goes wrong.
         FileReplace.MoveOver(rebuiltPath, archivePath);
+        return notes;
     }
 
     /// <summary>
@@ -156,16 +240,8 @@ public static class AdditionInstaller
     /// best, and at worst would shadow the original for every other mod using it.
     /// </summary>
     private static byte[] MergeCollision(
-        ImgArchive archive, ImgEntry entry, IReadOnlyList<ColRecord> additions, AddedMod record)
+        byte[] original, string bundleName, IReadOnlyList<ColRecord> additions, AddedMod record)
     {
-        byte[] original;
-        using (var stream = archive.OpenEntry(entry))
-        using (var buffer = new MemoryStream())
-        {
-            stream.CopyTo(buffer);
-            original = buffer.ToArray();
-        }
-
         var existing = new HashSet<string>(
             ColBundle.Read(original).Select(r => r.Name), StringComparer.OrdinalIgnoreCase);
 
@@ -176,7 +252,7 @@ public static class AdditionInstaller
         {
             record.Collisions.Add(new AddedCollision
             {
-                BundleName = entry.Name,
+                BundleName = bundleName,
                 ModelName = added.Name,
                 Sha256 = AdditionsManifest.ComputeSha256(added.Bytes),
             });

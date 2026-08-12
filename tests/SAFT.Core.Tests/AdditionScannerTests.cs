@@ -22,6 +22,42 @@ public class AdditionScannerTests
             usedObjectIds: new HashSet<int> { 616, 617 });
 
     [Fact]
+    public void A_supplied_mod_listing_gives_the_same_answer_as_walking_the_folder()
+    {
+        // The mod folder was walked five times in one install and SAFT hung inside the fifth. It is
+        // walked once and shared now, which is only safe if sharing changes nothing: same assets,
+        // same definitions, same placements, same slot arithmetic.
+        var mod = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(mod, "banshee.dff"), "replacement for an existing car");
+        File.WriteAllText(Path.Combine(mod, "saftcastle.dff"), "a brand new object");
+        File.WriteAllText(Path.Combine(mod, "saftcastle.txd"), "its texture");
+        File.WriteAllText(Path.Combine(mod, "castle.ide"), "objs\n12000, saftcastle, saftcastletxd, 300, 0\nend");
+        File.WriteAllText(Path.Combine(mod, "castle.ipl"),
+            "inst\n12000, saftcastle, 0, 2495.5, -1690.25, 14, 0, 0, 0, 1, -1\nend");
+        Directory.CreateDirectory(Path.Combine(mod, "nested"));
+        File.WriteAllText(Path.Combine(mod, "nested", "safttower.dff"), "a nested new object");
+
+        var game = GameContaining("banshee.dff");
+        var walked = ScanMod(mod, game);
+        var shared = AdditionScanner.Scan(
+            gameRoot: mod, modSourceFolder: mod, existsInGame: game,
+            baseline: Baseline, usedObjectIds: new HashSet<int> { 616, 617 },
+            onStep: null, modFiles: GameFiles.Walk(mod));
+
+        Assert.Equal(
+            walked.NewAssets.Select(a => a.FileName).OrderBy(n => n),
+            shared.NewAssets.Select(a => a.FileName).OrderBy(n => n));
+        Assert.Equal(walked.Definitions.Count, shared.Definitions.Count);
+        Assert.Equal(walked.Placements.Count, shared.Placements.Count);
+        Assert.Equal(walked.SlotsRequired, shared.SlotsRequired);
+
+        // The weighing reads the mod's files off that same listing, so it has to agree too — this is
+        // the number the streaming warning is built on.
+        Assert.Equal(walked.Density.TotalPlacements, shared.Density.TotalPlacements);
+        Assert.Equal(walked.Density.Densest?.Bytes, shared.Density.Densest?.Bytes);
+    }
+
+    [Fact]
     public void Separates_new_assets_from_replacements()
     {
         var mod = TestScratch.NewDir();

@@ -164,17 +164,23 @@ public static class DirectModInstaller
     /// is several seconds of work behind a single call, and when the process was killed part way
     /// through it there was no way to tell which phase it died in. The app passes ActivityLog.Note.
     /// </summary>
-    public static DirectInstallPlan Plan(string gameRoot, string modSourceFolder, Action<string>? onStep = null)
+    public static DirectInstallPlan Plan(
+        string gameRoot, string modSourceFolder, Action<string>? onStep = null, GameFiles? listing = null,
+        GameFiles? modListing = null)
     {
         onStep?.Invoke("plan: finding archives");
-        var foundArchives = GameScanner.FindArchives(gameRoot);
+        // One listing for the archive search and the loose-file index, which walked the game folder
+        // three times between them. See GameFiles.
+        var files = GameFiles.For(gameRoot, listing, onStep);
+        var foundArchives = GameScanner.FindArchives(gameRoot, files);
         var index = new Dictionary<string, List<(FoundArchive Archive, ImgEntry Entry)>>(StringComparer.OrdinalIgnoreCase);
 
         onStep?.Invoke($"plan: indexing {foundArchives.Count} archive(s)");
         foreach (var found in foundArchives)
         {
-            using var archive = ImgArchive.Open(found.AbsolutePath);
-            foreach (var entry in archive.Entries)
+            // The table only — the entries are matched against the mod's file names here, and read
+            // for real later by whatever ends up patching or rebuilding. See ImgArchive.ReadDirectory.
+            foreach (var entry in ImgArchive.ReadDirectory(found.AbsolutePath))
             {
                 if (!index.TryGetValue(entry.Name, out var targets))
                 {
@@ -187,30 +193,35 @@ public static class DirectModInstaller
 
         // What the mod actually contains, read once and reused for the matching loop below. This
         // exists to answer one question before doing any expensive work: does this mod have audio?
-        var modFiles = Directory.EnumerateFiles(modSourceFolder, "*", SearchOption.AllDirectories)
+        // The walk itself is shared with everything else that reads this folder — see GameFiles.
+        var modFiles = GameFiles.For(modSourceFolder, modListing, onStep).Paths
             .Where(p => !FileFilters.IsIgnoredFile(Path.GetFileName(p)))
             .ToList();
 
         var hasWav = modFiles.Any(p => p.EndsWith(".wav", StringComparison.OrdinalIgnoreCase));
         var hasOgg = modFiles.Any(p => p.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase));
 
-        // Indexing the game's sound slots means seeking through nine packages and reading the header
-        // of every bank in each - 61,993 slots on a stock game - and it was being done on every plan
-        // regardless of what the mod held. A mod containing one .dff paid the entire cost for an
-        // index nothing would ever look at. On an SD card under Winlator that is not merely wasteful:
-        // one run sat in this loop for over half an hour while another finished it in 2.2 seconds.
-        // Skipped entirely unless the mod actually has audio to match.
+        // Only the slots this mod names are read - see LookUpAudioSlots. The keys are derived here
+        // rather than inside it so the matching loop below and the lookup agree on exactly one
+        // definition of what a .wav's key is.
         Dictionary<string, AudioSlot> audioIndex;
         if (hasWav)
         {
-            onStep?.Invoke($"plan: {index.Count} archive entry name(s) indexed; mod has .wav files, indexing SFX");
-            audioIndex = BuildAudioIndex(gameRoot, onStep);
-            onStep?.Invoke($"plan: {audioIndex.Count} SFX slot(s) indexed");
+            var wantedKeys = modFiles
+                .Where(p => p.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+                .Select(p => FileFilters.GetLastPathSegments(p, 3))
+                .Where(k => k is not null)
+                .Select(k => k!)
+                .ToList();
+
+            onStep?.Invoke($"plan: {index.Count} archive entry name(s) indexed; looking up {wantedKeys.Count} sound slot(s)");
+            audioIndex = LookUpAudioSlots(gameRoot, wantedKeys, onStep);
+            onStep?.Invoke($"plan: {audioIndex.Count} sound slot(s) found");
         }
         else
         {
             audioIndex = new Dictionary<string, AudioSlot>(StringComparer.OrdinalIgnoreCase);
-            onStep?.Invoke($"plan: {index.Count} archive entry name(s) indexed; mod has no .wav files, skipping SFX index");
+            onStep?.Invoke($"plan: {index.Count} archive entry name(s) indexed; mod has no .wav files, skipping SFX lookup");
         }
 
         Dictionary<string, StreamSlot> streamIndex;
@@ -227,7 +238,7 @@ public static class DirectModInstaller
         }
 
         onStep?.Invoke("plan: indexing loose game files");
-        var unarchivedIndex = UnarchivedIndex.Build(gameRoot);
+        var unarchivedIndex = UnarchivedIndex.Build(gameRoot, files);
 
         onStep?.Invoke($"plan: {unarchivedIndex.Count} loose name(s); matching mod files");
 
@@ -373,40 +384,112 @@ public static class DirectModInstaller
         return true;
     }
 
-    private sealed record AudioSlot(
+    internal sealed record AudioSlot(
         SfxPackage Package, string PackageRelativePath, long BankHeaderOffset, long BankLength, int SoundIndex, long OriginalPcmLength);
 
     /// <summary>
-    /// Indexes every sound slot in the game. <paramref name="onStep"/> reports per package because a
-    /// run stalled inside here for 34 minutes, while another did the identical work in 2.2 seconds -
-    /// and a single breadcrumb around the whole loop could not say which of the nine packages it was
-    /// in, or whether it was making progress at all.
+    /// Looks up only the sound slots this mod actually names, instead of indexing the whole game.
+    ///
+    /// The old version walked all nine packages and read the header of every bank in each - 710 banks,
+    /// 61,993 slots on a stock game - to build a dictionary that a mod with 45 .wav files would then
+    /// make 45 lookups against. Everything else was thrown away. On an SD card under Winlator one run
+    /// spent 34 minutes in that loop; the crashes we chased for a day were all in the long stretch of
+    /// work an audio install did before it wrote anything.
+    ///
+    /// It was never necessary. A mod's folder layout IS the key: Package/Bank_NNN/sound_NNN.wav says
+    /// exactly which package, which bank and which slot, so the bank header can be read directly.
+    /// Requests are grouped by bank so a package is opened once and each bank read once, however many
+    /// sounds the mod replaces in it.
+    ///
+    /// A key naming a package, bank or slot the game doesn't have simply doesn't come back, which is
+    /// the same answer a missing dictionary entry gave before - the caller already reports those as
+    /// unmatched.
     /// </summary>
-    private static Dictionary<string, AudioSlot> BuildAudioIndex(string gameRoot, Action<string>? onStep = null)
+    internal static Dictionary<string, AudioSlot> LookUpAudioSlots(
+        string gameRoot, IEnumerable<string> wantedKeys, Action<string>? onStep = null)
     {
         var index = new Dictionary<string, AudioSlot>(StringComparer.OrdinalIgnoreCase);
-        var packages = SfxIndex.Load(gameRoot);
-        var packageNumber = 0;
 
-        foreach (var pkg in packages)
+        // Grouped as package -> bank -> the slots wanted from that bank, so the reads below can be
+        // driven straight off the structure rather than re-parsing keys.
+        var wanted = new Dictionary<string, Dictionary<int, List<(int SoundIndex, string Key)>>>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var key in wantedKeys.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            packageNumber++;
-            onStep?.Invoke($"plan: sfx package {packageNumber}/{packages.Count} {pkg.Name} ({pkg.Banks.Count} banks)");
+            if (!TryParseAudioKey(key, out var packageName, out var bankNumber, out var soundNumber)) continue;
+
+            if (!wanted.TryGetValue(packageName, out var banks))
+            {
+                banks = new Dictionary<int, List<(int, string)>>();
+                wanted[packageName] = banks;
+            }
+            if (!banks.TryGetValue(bankNumber, out var slots))
+            {
+                slots = new List<(int, string)>();
+                banks[bankNumber] = slots;
+            }
+            slots.Add((soundNumber - 1, key));
+        }
+
+        if (wanted.Count == 0) return index;
+
+        var packages = SfxIndex.Load(gameRoot)
+            .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (packageName, banks) in wanted)
+        {
+            if (!packages.TryGetValue(packageName, out var pkg)) continue;
+
+            onStep?.Invoke($"plan: sfx {packageName}, reading {banks.Count} bank(s) of {pkg.Banks.Count}");
             using var stream = File.OpenRead(pkg.AbsolutePath);
             var packageRelativePath = Path.GetRelativePath(gameRoot, pkg.AbsolutePath);
 
-            for (var bankNum = 1; bankNum <= pkg.Banks.Count; bankNum++)
+            foreach (var (bankNumber, slots) in banks)
             {
-                var (offset, length) = pkg.Banks[bankNum - 1];
+                if (bankNumber < 1 || bankNumber > pkg.Banks.Count) continue;
+
+                var (offset, length) = pkg.Banks[bankNumber - 1];
                 var bank = SfxBank.Read(stream, offset, length);
-                for (var soundIdx = 0; soundIdx < bank.Sounds.Count; soundIdx++)
+
+                foreach (var (soundIndex, key) in slots)
                 {
-                    var key = $"{pkg.Name}/Bank_{bankNum:D3}/sound_{soundIdx + 1:D3}.wav";
-                    index[key] = new AudioSlot(pkg, packageRelativePath, offset, length, soundIdx, bank.GetPcmLength(soundIdx));
+                    if (soundIndex < 0 || soundIndex >= bank.Sounds.Count) continue;
+                    index[key] = new AudioSlot(
+                        pkg, packageRelativePath, offset, length, soundIndex, bank.GetPcmLength(soundIndex));
                 }
             }
         }
+
         return index;
+    }
+
+    /// <summary>
+    /// Splits a Package/Bank_NNN/sound_NNN.wav key back into its three parts. The names are SAFT's
+    /// own - it wrote this layout during extraction - so anything that doesn't match the shape is a
+    /// .wav the user placed somewhere else, and is left to be reported as unmatched.
+    /// </summary>
+    internal static bool TryParseAudioKey(string key, out string packageName, out int bankNumber, out int soundNumber)
+    {
+        packageName = string.Empty;
+        bankNumber = 0;
+        soundNumber = 0;
+
+        var parts = key.Split('/');
+        if (parts.Length != 3) return false;
+
+        if (!parts[1].StartsWith("Bank_", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!int.TryParse(parts[1].AsSpan("Bank_".Length), out bankNumber)) return false;
+
+        var sound = parts[2];
+        if (!sound.StartsWith("sound_", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!sound.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)) return false;
+        var digits = sound["sound_".Length..^".wav".Length];
+        if (!int.TryParse(digits, out soundNumber)) return false;
+
+        packageName = parts[0];
+        return packageName.Length > 0;
     }
 
     private sealed record StreamSlot(StreamStation Station, string StationRelativePath, long HeaderOffset, long OriginalPayloadLength);
@@ -435,8 +518,16 @@ public static class DirectModInstaller
     /// silently skipped here — filter the plan first if you need to warn about them.
     /// </summary>
     public static DirectInstallResult Apply(
-        DirectInstallPlan plan, string? backupOutputFolder, IProgress<DirectInstallProgress>? progress = null)
+        DirectInstallPlan plan, string? backupOutputFolder, IProgress<DirectInstallProgress>? progress = null,
+        Action<string>? onStep = null, IReadOnlySet<string>? deferRebuildsFor = null, StorageSpeed? speed = null)
     {
+        // Breadcrumbs, per item, for the same reason Plan has them. The install path had none, so a
+        // process that died in here left a log ending at whichever popup came before it - which for
+        // an audio mod means 57 separate sounds and tracks with nothing to say which one it was on.
+        onStep?.Invoke(
+            $"apply: {plan.Matches.Count} archived, {plan.AudioMatchesThatFit.Count} sfx, " +
+            $"{plan.StreamMatchesThatFit.Count} tracks, {plan.UnarchivedMatches.Count} loose");
+
         // Throttled at the door, so every progress?.Report below it - including the ones passed
         // down into the private helpers - costs a UI round trip ten times a second rather than
         // once per file. See ThrottledProgress: per-file reporting is what made a full extraction
@@ -458,6 +549,8 @@ public static class DirectModInstaller
             var needsRebuild = group.Any(m => m.RequiresRebuild);
             var archiveIndex = i + 1;
 
+            onStep?.Invoke($"apply: archive {archiveIndex} {archiveRelativePath}, {group.Count} entry/entries, rebuild={needsRebuild}");
+
             if (backupOutputFolder is not null)
             {
                 BackupOriginals(archiveAbsolutePath, archiveRelativePath, group, backupOutputFolder,
@@ -465,11 +558,29 @@ public static class DirectModInstaller
                         archiveRelativePath, archiveIndex, totalGroups, "Backing up originals", done, total)));
             }
 
+            // Adding new assets to an archive rewrites it in full - there is no way to append an
+            // entry in place - so a mod that both replaces oversized files AND adds assets used to
+            // rewrite the same archive TWICE in one install. On a real device that was models\gta3.img,
+            // 940 MB, written out twice: the first pass took 36.8 seconds and the process was killed
+            // during the second. The originals are backed up above either way, so handing these
+            // replacements to the additions rewrite loses nothing and halves the heaviest thing SAFT
+            // does. If that rewrite never happens, the archive is simply untouched - which is a safer
+            // failure than a half-applied one.
+            if (deferRebuildsFor is not null && deferRebuildsFor.Contains(archiveRelativePath))
+            {
+                onStep?.Invoke(
+                    $"apply: archive {archiveIndex} {archiveRelativePath}, {group.Count} entry/entries " +
+                    "handed to the additions rewrite (one rebuild instead of two)");
+                summaries.Add(new DirectInstallSummary(archiveRelativePath, group.Count, true));
+                continue;
+            }
+
             if (needsRebuild)
             {
                 RebuildArchiveWithReplacements(archiveAbsolutePath, group,
                     (done, total) => progress?.Report(new DirectInstallProgress(
-                        archiveRelativePath, archiveIndex, totalGroups, "Rebuilding (mod files are larger than the originals)", done, total)));
+                        archiveRelativePath, archiveIndex, totalGroups, "Rebuilding (mod files are larger than the originals)", done, total)),
+                    speed);
             }
             else
             {
@@ -489,6 +600,8 @@ public static class DirectModInstaller
 
             progress?.Report(new DirectInstallProgress(
                 match.MatchKey, byArchive.Count + 1, totalGroups, "Patching audio in place", i + 1, audioToApply.Count));
+
+            onStep?.Invoke($"apply: sfx {i + 1}/{audioToApply.Count} {match.MatchKey} ({match.OriginalPcmLength:N0} -> {match.NewPcmLength:N0} bytes)");
 
             try
             {
@@ -523,6 +636,8 @@ public static class DirectModInstaller
             progress?.Report(new DirectInstallProgress(
                 match.MatchKey, streamGroupIndex, totalGroups, "Patching streamed audio in place", i + 1, streamsToApply.Count));
 
+            onStep?.Invoke($"apply: track {i + 1}/{streamsToApply.Count} {match.MatchKey} ({match.OriginalPayloadLength:N0} -> {match.NewPayloadLength:N0} bytes)");
+
             try
             {
                 var backedUp = false;
@@ -532,10 +647,11 @@ public static class DirectModInstaller
                     backedUp = true;
                 }
 
-                var newPayload = File.ReadAllBytes(match.ModFilePath);
-                if (!StreamIndex.LooksLikeOgg(newPayload))
+                // Only the first four bytes are needed to know it is an Ogg; reading the whole file
+                // to check them was a multi-megabyte allocation for a four-byte question.
+                if (!LooksLikeOggFile(match.ModFilePath))
                     throw new InvalidDataException($"'{match.ModFilePath}' doesn't look like a valid Ogg file (missing 'OggS' header).");
-                PatchStreamTrack(match, newPayload);
+                PatchStreamTrack(match);
 
                 streamSummaries.Add(new DirectStreamSummary(match.MatchKey, backedUp));
             }
@@ -554,6 +670,8 @@ public static class DirectModInstaller
 
             progress?.Report(new DirectInstallProgress(
                 match.RelativePath, unarchivedGroupIndex, totalGroups, "Replacing game files", i + 1, plan.UnarchivedMatches.Count));
+
+            onStep?.Invoke($"apply: loose {i + 1}/{plan.UnarchivedMatches.Count} {match.RelativePath}");
 
             try
             {
@@ -584,6 +702,7 @@ public static class DirectModInstaller
             }
         }
 
+        onStep?.Invoke("apply: finished");
         return new DirectInstallResult(
             summaries, audioSummaries, streamSummaries, audioFailed, streamFailed, unarchivedSummaries, unarchivedFailed);
     }
@@ -596,6 +715,14 @@ public static class DirectModInstaller
     /// replace the vanilla copy with a modded one and quietly destroy the only way back. The first
     /// copy is always the closest thing to stock, so it wins; every later attempt is skipped.
     /// </summary>
+    /// <summary>Whether a file starts with the four bytes "OggS", without reading the rest of it.</summary>
+    private static bool LooksLikeOggFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        var head = new byte[4];
+        return stream.Read(head, 0, 4) == 4 && StreamIndex.LooksLikeOgg(head);
+    }
+
     private static bool NeedsBackup(string destPath)
     {
         if (File.Exists(destPath)) return false;
@@ -621,6 +748,16 @@ public static class DirectModInstaller
     private static void PatchAudioSound(DirectAudioMatch match, byte[] newPcm) =>
         SfxBank.PatchSound(match.PackageAbsolutePath, match.BankHeaderOffset, match.BankLength, match.SoundIndex, newPcm);
 
+    /// <summary>
+    /// Copies one track out to the backup folder, decrypting as it goes, a chunk at a time.
+    ///
+    /// This used to allocate the entire payload and then hand it to StreamXor.Transform, which
+    /// CLONES its input - so backing up BEATS/Track_002, 6.3 MB in a stock game, meant two 6.3 MB
+    /// arrays alive together, with File.ReadAllBytes on the replacement about to make a third. Every
+    /// one of those is a Large Object Heap allocation, the LOH is never compacted, and SAFT is a
+    /// 32-bit process. It died here, on the largest track of the twelve, after the eleven smaller
+    /// ones had installed without complaint.
+    /// </summary>
     private static void BackupStreamOriginal(DirectStreamMatch match, string backupOutputFolder)
     {
         var destPath = Path.Combine(backupOutputFolder, "audio", "streams", match.MatchKey.Replace('/', Path.DirectorySeparatorChar));
@@ -629,15 +766,26 @@ public static class DirectModInstaller
         using var stream = File.OpenRead(match.StationAbsolutePath);
         var payloadOffset = match.HeaderOffset + StreamIndex.TrackHeaderSize;
         stream.Position = payloadOffset;
-        var encrypted = new byte[match.OriginalPayloadLength];
-        stream.ReadExactly(encrypted);
-        var decrypted = StreamXor.Transform(encrypted, payloadOffset);
 
-        File.WriteAllBytes(destPath, decrypted);
+        using var backup = File.Create(destPath);
+        var buffer = new byte[81920];
+        var remaining = match.OriginalPayloadLength;
+        var position = payloadOffset;
+
+        while (remaining > 0)
+        {
+            var chunk = (int)Math.Min(buffer.Length, remaining);
+            stream.ReadExactly(buffer, 0, chunk);
+            StreamXor.Transform(buffer.AsSpan(0, chunk), position);   // in place, no second array
+            backup.Write(buffer, 0, chunk);
+
+            position += chunk;
+            remaining -= chunk;
+        }
     }
 
-    private static void PatchStreamTrack(DirectStreamMatch match, byte[] newPayload) =>
-        StreamIndex.PatchTrack(match.StationAbsolutePath, match.HeaderOffset, match.OriginalPayloadLength, newPayload);
+    private static void PatchStreamTrack(DirectStreamMatch match) =>
+        StreamIndex.PatchTrack(match.StationAbsolutePath, match.HeaderOffset, match.OriginalPayloadLength, match.ModFilePath);
 
     private static void BackupOriginals(
         string archiveAbsolutePath, string archiveRelativePath, IReadOnlyList<DirectInstallMatch> matches,
@@ -689,6 +837,10 @@ public static class DirectModInstaller
                 .ToList();
         } // read handle must close before we reopen the same path for writing
 
+        // Patching in place leaves the directory table untouched, so a cached copy stays correct —
+        // but this is not the place to be clever about that. See ImgArchive.Write.
+        ImgArchive.ClearCaches();
+
         using var writeStream = new FileStream(archiveAbsolutePath, FileMode.Open, FileAccess.Write, FileShare.Read);
         for (var i = 0; i < targets.Count; i++)
         {
@@ -736,11 +888,10 @@ public static class DirectModInstaller
     /// the still-open original; matched ones from the mod files) into a temp file, then swaps it
     /// in — used only for archives where at least one replacement doesn't fit in place.
     /// </summary>
-    private static void RebuildArchiveWithReplacements(string archiveAbsolutePath, IReadOnlyList<DirectInstallMatch> matches, Action<int, int>? onProgress)
+    private static void RebuildArchiveWithReplacements(
+        string archiveAbsolutePath, IReadOnlyList<DirectInstallMatch> matches, Action<int, int>? onProgress,
+        StorageSpeed? speed)
     {
-        var logDir = Path.GetDirectoryName(archiveAbsolutePath)!;
-        DiagnosticLog.Write(logDir, $"RebuildArchiveWithReplacements: starting for '{archiveAbsolutePath}' ({matches.Count} replacement(s))");
-
         var replacementsByName = matches.ToDictionary(m => m.EntryName, m => m.ModFilePath, StringComparer.OrdinalIgnoreCase);
         var tempPath = archiveAbsolutePath + ".saft-tmp";
 
@@ -748,19 +899,10 @@ public static class DirectModInstaller
         // (exactly what just happened) leaves this file behind — always start from a guaranteed-
         // fresh path rather than relying on ImgArchive.Write's FileMode.Create to correctly
         // overwrite whatever's already there.
-        DiagnosticLog.Write(logDir, $"Checking for leftover temp file at '{tempPath}'");
-        if (File.Exists(tempPath))
-        {
-            DiagnosticLog.Write(logDir, "Leftover temp file found — deleting it");
-            File.Delete(tempPath);
-            DiagnosticLog.Write(logDir, "Leftover temp file deleted");
-        }
+        if (File.Exists(tempPath)) File.Delete(tempPath);
 
-        DiagnosticLog.Write(logDir, "Opening original archive for reading");
         using (var archive = ImgArchive.Open(archiveAbsolutePath))
         {
-            DiagnosticLog.Write(logDir, $"Original archive opened successfully — {archive.Entries.Count} entries");
-
             var files = archive.Entries
                 .Select(entry => (
                     Name: entry.Name,
@@ -770,23 +912,13 @@ public static class DirectModInstaller
                             : archive.OpenEntry(entry))))
                 .ToList();
 
-            DiagnosticLog.Write(logDir, $"Starting ImgArchive.Write to '{tempPath}' with {files.Count} file(s)");
-            ImgArchive.Write(tempPath, files, onFileWritten: (done, total) =>
-            {
-                if (done == 1 || done == total || done % 2000 == 0)
-                    DiagnosticLog.Write(logDir, $"Write progress: {done} of {total}");
-                onProgress?.Invoke(done, total);
-            });
-            DiagnosticLog.Write(logDir, "ImgArchive.Write completed");
+            ImgArchive.Write(tempPath, files, onFileWritten: onProgress, onBytesWritten: speed is null ? null : speed.Sample);
         } // read handle on the original must close before we overwrite it
-        DiagnosticLog.Write(logDir, "Original archive handle closed");
 
         // A rename (same volume, since tempPath is right next to archiveAbsolutePath), not a full
         // second read-and-write of the whole archive — File.Copy+Delete here was doing needless
         // extra I/O of the entire archive a second time for no reason, which matters a lot more on
         // a resource-constrained platform than on a real Windows machine with I/O to spare.
-        DiagnosticLog.Write(logDir, $"Moving '{tempPath}' into place over '{archiveAbsolutePath}'");
         FileReplace.MoveOver(tempPath, archiveAbsolutePath);
-        DiagnosticLog.Write(logDir, "Move completed successfully — rebuild finished");
     }
 }

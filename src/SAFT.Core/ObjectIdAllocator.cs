@@ -43,6 +43,21 @@ public static class ObjectIdAllocator
     /// </summary>
     public const int DefaultEngineModelLimit = 20000;
 
+    /// <summary>
+    /// Every object ID in a set of definitions that has already been read.
+    ///
+    /// <see cref="ScanUsedIds"/> re-reads all 60 .ide files to work this out, which is pure waste
+    /// when the caller is holding a <see cref="GameSnapshot"/> that parsed exactly the same files
+    /// moments earlier. Reading them twice per install is the class of duplication that made SAFT
+    /// hang on an SD card still busy from a previous write.
+    /// </summary>
+    public static SortedSet<int> UsedIdsFrom(IEnumerable<IdeDefinition> definitions)
+    {
+        var used = new SortedSet<int>();
+        foreach (var definition in definitions) used.Add(definition.ObjectId);
+        return used;
+    }
+
     /// <summary>Every object ID defined anywhere under a game folder or extracted install.</summary>
     public static SortedSet<int> ScanUsedIds(string root)
     {

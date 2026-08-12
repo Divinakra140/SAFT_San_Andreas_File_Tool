@@ -21,6 +21,55 @@ public sealed class ConfirmDialog : Form
 
     public bool Result { get; private set; }
 
+    /// <summary>
+    /// The status icon, held so it can be released. A PictureBox does NOT own the image it is given -
+    /// disposing the control leaves the bitmap alive - so without this every dialog that showed a
+    /// verdict left a GDI bitmap behind for the rest of the session. SAFT is a 32-bit process running
+    /// through Wine, where GDI objects are a scarcer resource than memory.
+    /// </summary>
+    private Bitmap? _statusIcon;
+
+    /// <summary>Winlator's recommended resolution, and the answer if the OS won't give a better one.</summary>
+    private static readonly Rectangle AssumedScreen = new(0, 0, 960, 544);
+
+    /// <summary>
+    /// The usable screen, asked for ONCE per run and remembered.
+    ///
+    /// This is where a crash happened. A run died four milliseconds into this constructor, after the
+    /// "building" line and before anything else it writes — and what sat in that gap was a question to
+    /// the OS about the cursor's position and which monitor it was on, asked afresh every single time
+    /// a dialog opened. It was already wrapped in a try/catch and already carried a comment calling it
+    /// the surface most likely to behave differently under an emulated Windows; what a try/catch
+    /// cannot do is survive a native fault inside Wine's display code, which is precisely the failure
+    /// this app has: the process dies without the CLR ever seeing an exception.
+    ///
+    /// A screen does not change size while SAFT is open, so asking once is not a cache in the risky
+    /// sense — it is not holding anything that can go stale. It also drops <c>Cursor.Position</c>
+    /// entirely: a cursor is a strange thing to ask about on a touchscreen, and every device SAFT runs
+    /// on has one screen, so the primary one is the same answer with one less question.
+    /// </summary>
+    private static Rectangle? _screen;
+
+    private static Rectangle ScreenWorkingArea()
+    {
+        if (_screen is { } known) return known;
+
+        Rectangle found;
+        try
+        {
+            var area = Screen.PrimaryScreen?.WorkingArea ?? AssumedScreen;
+            found = area.Width < 320 || area.Height < 200 ? AssumedScreen : area;
+        }
+        catch
+        {
+            found = AssumedScreen;
+        }
+
+        _screen = found;
+        ActivityLog.Note($"dialog: screen is {found.Width}x{found.Height}, asked once for this run");
+        return found;
+    }
+
     /// <summary>Two-button confirmation.</summary>
     public ConfirmDialog(string message, string yesText, string noText, StreamingSeverity? severity = null)
         : this(message, yesText, noText, severity, singleButton: false) { }
@@ -28,6 +77,19 @@ public sealed class ConfirmDialog : Form
     /// <summary>Single-button acknowledgement, for news that isn't a decision.</summary>
     public static ConfirmDialog Acknowledgement(string message, string okText, StreamingSeverity severity) =>
         new(message, okText, string.Empty, severity, singleButton: true);
+
+    /// <summary>
+    /// Single-button note with no status icon — plain information, no verdict attached.
+    ///
+    /// Exists so nothing in an install has to fall back to a raw MessageBox. A MessageBox is a native
+    /// Win32 dialog with a system icon, drawn by Wine rather than by SAFT, and it writes NOTHING to
+    /// the activity log: the one shown after "yes, add new assets" was a 1.8 second hole in the log
+    /// with a crash landing on either side of it, and no way to tell whether the process died before
+    /// it, inside it, or after. This is the dialog the app already opens hundreds of times without
+    /// trouble, and it says so in the log.
+    /// </summary>
+    public static ConfirmDialog Note(string message, string okText) =>
+        new(message, okText, string.Empty, null, singleButton: true);
 
     /// <summary>
     /// Two buttons, where the FIRST is disabled for a fixed number of seconds and the second is live
@@ -59,23 +121,8 @@ public sealed class ConfirmDialog : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
 
-        // Winlator's recommended resolution is 960x544 — a screen far shorter than a desktop's, where
-        // height is the scarce resource and width is not. So the dialog spends width to buy height:
-        // wrapping the same text at 720px instead of 440px removes roughly a third of the lines, and
-        // that is usually the difference between reading the message and scrolling it.
-        // Guarded because this is the first thing the dialog does and it asks the OS about screens
-        // and cursors — exactly the surface most likely to behave differently under an emulated
-        // Windows. A dialog that opens at a guessed size beats one that takes the app down.
-        Rectangle screen;
-        try
-        {
-            screen = Screen.FromPoint(Cursor.Position).WorkingArea;
-            if (screen.Width < 320 || screen.Height < 200) screen = new Rectangle(0, 0, 960, 544);
-        }
-        catch
-        {
-            screen = new Rectangle(0, 0, 960, 544);   // Winlator's recommended resolution
-        }
+        var screen = ScreenWorkingArea();
+        ActivityLog.Note("dialog: measuring");
 
         var maxClientHeight = Math.Max(200, screen.Height - 70);
         var maxClientWidth = Math.Max(320, screen.Width - 40);
@@ -129,8 +176,15 @@ public sealed class ConfirmDialog : Form
             Width = textWidth,
         };
 
+        // Measured against a large but FINITE height. This asks Wine's GDI to lay the whole message
+        // out and hand back the rectangle it would fill, and it used to pass int.MaxValue as the
+        // height to measure into — a value no real dialog needs and the kind of extreme that native
+        // layout code is least likely to have been written carefully around. 20,000 pixels is more
+        // than any message here will ever want, and anything that somehow exceeded it scrolls, which
+        // this dialog already handles.
+        const int measurementCeiling = 20_000;
         var textHeight = TextRenderer.MeasureText(
-            text, messageBox.Font, new Size(textWidth, int.MaxValue),
+            text, messageBox.Font, new Size(textWidth, measurementCeiling),
             TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl).Height + 8;
 
         var buttonHeight = buttons[0].Height;
@@ -146,6 +200,7 @@ public sealed class ConfirmDialog : Form
         if (textHeight > visibleTextHeight) messageBox.ScrollBars = ScrollBars.Vertical;
         messageBox.Height = visibleTextHeight;
         Controls.Add(messageBox);
+        ActivityLog.Note("dialog: text laid out");
 
         // Selection would otherwise be visible on open, which looks like a text field rather than a
         // message; deselecting on first show keeps it looking like prose.
@@ -163,10 +218,9 @@ public sealed class ConfirmDialog : Form
             // the icon was indistinguishable from the rest of the layout as a suspect.
             ActivityLog.Note($"dialog: drawing {level} status icon");
 
-            Image? icon = null;
             try
             {
-                icon = DrawStatusIcon(level);
+                _statusIcon = DrawStatusIcon(level);
                 ActivityLog.Note("dialog: status icon drawn");
             }
             catch (Exception ex)
@@ -174,7 +228,7 @@ public sealed class ConfirmDialog : Form
                 ActivityLog.Note($"dialog: status icon could not be drawn, continuing without it - {ex.Message}");
             }
 
-            if (icon is not null)
+            if (_statusIcon is not null)
             {
                 Controls.Add(new PictureBox
                 {
@@ -182,7 +236,7 @@ public sealed class ConfirmDialog : Form
                     Top = DialogMargin,
                     Width = IconSize,
                     Height = IconSize,
-                    Image = icon,
+                    Image = _statusIcon,
                     SizeMode = PictureBoxSizeMode.Normal,
                 });
             }
@@ -298,6 +352,25 @@ public sealed class ConfirmDialog : Form
     {
         base.OnFormClosed(e);
         ActivityLog.Note($"dialog: closed, answer {(Result ? "yes" : "no")}");
+    }
+
+    /// <summary>
+    /// Releases the status icon along with the window.
+    ///
+    /// ShowDialog does NOT dispose the form it shows - deliberately, since the caller still has to
+    /// read <see cref="Result"/> afterwards - so every caller has to dispose it, and until now none
+    /// of them did. That left a form and its bitmap alive for the whole session, once per popup.
+    /// Disposing the icon here rather than in OnFormClosed keeps it valid for as long as the window
+    /// it is painted in.
+    /// </summary>
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _statusIcon?.Dispose();
+            _statusIcon = null;
+        }
+        base.Dispose(disposing);
     }
 
     /// <summary>

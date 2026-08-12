@@ -27,11 +27,11 @@ public static class GameScanner
     /// Recursively scans <paramref name="root"/> for *.img files and returns the ones that are
     /// genuine VER2 archives (verified by magic bytes, not just extension).
     /// </summary>
-    public static IReadOnlyList<FoundArchive> FindArchives(string root)
+    public static IReadOnlyList<FoundArchive> FindArchives(string root, GameFiles? files = null)
     {
         var results = new List<FoundArchive>();
 
-        foreach (var path in Directory.EnumerateFiles(root, "*.img", SearchOption.AllDirectories))
+        foreach (var path in GameFiles.For(root, files).WithExtension(".img"))
         {
             if (!ImgArchive.IsImgArchive(path)) continue;
 

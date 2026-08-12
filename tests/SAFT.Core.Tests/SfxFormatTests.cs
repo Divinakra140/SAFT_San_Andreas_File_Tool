@@ -123,4 +123,50 @@ public class SfxFormatTests
 
         Assert.Throws<InvalidDataException>(() => WavPcm.ReadMono16Wav(path));
     }
+
+    /// <summary>
+    /// 9 of this game's 61,993 sounds have a last-sound buffer offset past where the bank lookup says
+    /// the bank ends. That subtraction used to be done in uint, so it wrapped to about 4.29 billion -
+    /// which made every replacement look like it fitted, and would have had PatchSound zero-fill 4 GB
+    /// over the package. Clamped to 0 now, so the sound simply cannot be replaced.
+    /// </summary>
+    [Fact]
+    public void A_last_sound_reaching_past_the_bank_end_reports_zero_length_not_four_billion()
+    {
+        // One sound whose buffer offset is beyond the bank's PCM region, exactly as FEET bank 4 is.
+        var bankLength = SfxIndex.BankHeaderSize + 1_000;
+        var header = new byte[SfxIndex.BankHeaderSize];
+        BitConverter.GetBytes(1u).CopyTo(header, 0);          // one sound
+        BitConverter.GetBytes(2_028u).CopyTo(header, 4);      // offset past the 1,000 bytes of data
+        BitConverter.GetBytes(0).CopyTo(header, 8);
+        BitConverter.GetBytes((ushort)22050).CopyTo(header, 12);
+
+        using var stream = new MemoryStream(header.Concat(new byte[1_000]).ToArray());
+        var bank = SfxBank.Read(stream, 0, bankLength);
+
+        var length = bank.GetPcmLength(0);
+
+        Assert.Equal(0, length);
+        Assert.True(length >= 0, "a negative length must never be handed back as a huge positive one");
+    }
+
+    [Fact]
+    public void Ordinary_sounds_still_measure_up_to_the_next_ones_offset()
+    {
+        var bankLength = SfxIndex.BankHeaderSize + 300;
+        var header = new byte[SfxIndex.BankHeaderSize];
+        BitConverter.GetBytes(2u).CopyTo(header, 0);
+        BitConverter.GetBytes(0u).CopyTo(header, 4);          // sound 1 at 0
+        BitConverter.GetBytes(0).CopyTo(header, 8);
+        BitConverter.GetBytes((ushort)22050).CopyTo(header, 12);
+        BitConverter.GetBytes(100u).CopyTo(header, 16);       // sound 2 at 100
+        BitConverter.GetBytes(0).CopyTo(header, 20);
+        BitConverter.GetBytes((ushort)22050).CopyTo(header, 24);
+
+        using var stream = new MemoryStream(header.Concat(new byte[300]).ToArray());
+        var bank = SfxBank.Read(stream, 0, bankLength);
+
+        Assert.Equal(100, bank.GetPcmLength(0));   // up to the next sound
+        Assert.Equal(200, bank.GetPcmLength(1));   // last one runs to the end of the bank
+    }
 }

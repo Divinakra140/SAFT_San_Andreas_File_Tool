@@ -49,25 +49,112 @@ public sealed class ImgArchive : IDisposable
         Entries = entries;
     }
 
+    /// <summary>
+    /// Identity of a file as far as its parsed contents are concerned. Two reads of the same path
+    /// with the same length and the same last-write time cannot disagree, and any write SAFT makes -
+    /// an in-place patch, a rebuild, a restore from backup - moves at least one of them.
+    /// </summary>
+    private readonly record struct FileIdentity(string Path, long Length, DateTime LastWriteUtc);
+
+    private static FileIdentity? IdentityOf(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists) return null;
+            return new FileIdentity(path, info.Length, info.LastWriteTimeUtc);
+        }
+        catch { return null; }
+    }
+
+    // One analysis pass opens the same handful of archives over and over: the plan indexes them, the
+    // asset weighing reads them again, the binary .ipl reader opens them again, and the archive
+    // search magic-checks every one of them each time it runs. On a real device that came to four
+    // opens and three tree walks over models\gta3.img - a 940 MB file - inside a five second window,
+    // for a game folder nothing had touched.
+    //
+    // That is the working set the process gets killed over. Both of these are pure functions of a
+    // file's identity, so they are answered once and reused until the file itself changes. Keyed on
+    // length and last-write time, so any write invalidates the entry rather than serving a stale
+    // directory table - which would be far worse than the cost it saves.
+    private static readonly Dictionary<FileIdentity, bool> MagicCache = new();
+    private static readonly Dictionary<FileIdentity, IReadOnlyList<ImgEntry>> DirectoryCache = new();
+    private static readonly object CacheLock = new();
+
     /// <summary>Returns true if the file at <paramref name="path"/> begins with the VER2 magic.</summary>
     public static bool IsImgArchive(string path)
     {
+        var identity = IdentityOf(path);
+        if (identity is { } id)
+        {
+            lock (CacheLock)
+                if (MagicCache.TryGetValue(id, out var cached)) return cached;
+        }
+
+        bool result;
         try
         {
             using var fs = File.OpenRead(path);
             if (fs.Length < 8) return false;
             Span<byte> header = stackalloc byte[4];
             var read = fs.Read(header);
-            return read == 4 && Encoding.ASCII.GetString(header) == Magic;
+            result = read == 4 && Encoding.ASCII.GetString(header) == Magic;
         }
         catch (IOException)
         {
             return false;
         }
+
+        if (identity is { } toCache)
+            lock (CacheLock) MagicCache[toCache] = result;
+
+        return result;
+    }
+
+    /// <summary>
+    /// The entry table alone, WITHOUT holding the archive open.
+    ///
+    /// Most readers of an archive never touch an entry's contents — they want the names, or the
+    /// sizes. Weighing the game's assets is one, indexing what a mod could replace is another,
+    /// listing what names the game already has is a third. Between them they opened all eight
+    /// archives three times over during the checks, models\gta3.img among them, and a real device
+    /// died on the log line "weigh: archive 6/8 models\gta3.img - opening" — four seconds into a
+    /// fresh session, with the file open being the last thing it did.
+    ///
+    /// A cached directory table needs no file at all, so a warm call here touches nothing; a cold one
+    /// opens, parses and closes immediately rather than keeping a 940 MB file open across the loop
+    /// that follows. Same table, same cache, same invalidation - just without the handle.
+    /// </summary>
+    public static IReadOnlyList<ImgEntry> ReadDirectory(string path)
+    {
+        var identity = IdentityOf(path);
+        if (identity is { } id)
+        {
+            lock (CacheLock)
+                if (DirectoryCache.TryGetValue(id, out var cached)) return cached;
+        }
+
+        using var archive = Open(path);
+        return archive.Entries;
     }
 
     public static ImgArchive Open(string path)
     {
+        var identity = IdentityOf(path);
+        if (identity is { } id)
+        {
+            IReadOnlyList<ImgEntry>? cached;
+            lock (CacheLock) DirectoryCache.TryGetValue(id, out cached);
+
+            if (cached is not null)
+            {
+                // The stream is still opened - entry contents are read through it on demand - but the
+                // directory table behind it is not re-parsed.
+                var reuseStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                return new ImgArchive(path, reuseStream, cached);
+            }
+        }
+
         var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         try
         {
@@ -90,12 +177,33 @@ public sealed class ImgArchive : IDisposable
                 entries.Add(new ImgEntry(name, offset, streamingSize));
             }
 
+            // Re-read the identity AFTER parsing: if the file changed while it was being read, the
+            // identity taken beforehand would key this table against the wrong version of the file.
+            var settled = IdentityOf(path);
+            if (settled is { } key && key == identity)
+                lock (CacheLock) DirectoryCache[key] = entries;
+
             return new ImgArchive(path, stream, entries);
         }
         catch
         {
             stream.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Drops every cached magic check and directory table. Called by anything that writes an
+    /// archive, and this IS load-bearing for correctness rather than merely tidy: file length and
+    /// last-write time are not a reliable enough fingerprint on their own, because FAT32 records
+    /// modification times to a two second granularity and a rebuild can land on the same length.
+    /// </summary>
+    public static void ClearCaches()
+    {
+        lock (CacheLock)
+        {
+            MagicCache.Clear();
+            DirectoryCache.Clear();
         }
     }
 
@@ -137,12 +245,28 @@ public sealed class ImgArchive : IDisposable
     /// Silence there is indistinguishable from a hang, so it gets its own progress like every other
     /// stage that takes real time.
     /// </summary>
+    /// <param name="onBytesWritten">
+    /// The running total of bytes on disk, reported at the same throttled points as
+    /// <paramref name="onFileWritten"/>. Used to notice when the storage underneath has slowed down —
+    /// see <see cref="StorageSpeed"/>. It is a number this loop already has (the output stream's own
+    /// position), so measuring it costs nothing and changes nothing about what gets written.
+    /// </param>
     public static void Write(
         string destinationPath,
         IReadOnlyList<(string Name, Func<Stream> OpenContent)> files,
         Action<int, int>? onFileWritten = null,
-        Action<int, int>? onFileMeasured = null)
+        Action<int, int>? onFileMeasured = null,
+        Action<long>? onBytesWritten = null)
     {
+        // Any archive write invalidates every cached directory table. Length and last-write time
+        // alone are not enough to lean on here: an SD card formatted FAT32 records modification
+        // times to a two second granularity, so a rebuild that happened to land on the same file
+        // length could be indistinguishable from the version already cached. Serving a stale
+        // directory table would mean reading entries at the wrong offsets, which is exactly the kind
+        // of harm SAFT must never do to somebody's install. Rebuilds are rare and scans are not, so
+        // dropping everything on a write costs nothing worth measuring.
+        ClearCaches();
+
         foreach (var f in files)
         {
             if (Encoding.ASCII.GetByteCount(f.Name) > ImgEntry.MaxNameLength)
@@ -206,8 +330,11 @@ public sealed class ImgArchive : IDisposable
             // built to avoid. Throttled to a still-smooth-looking rate; always fires on the last
             // file so callers relying on the final callback (e.g. to reach 100%) still get it.
             var done = i + 1;
-            if (onFileWritten is not null && (done == files.Count || done % 25 == 0))
-                onFileWritten(done, files.Count);
+            if (done == files.Count || done % 25 == 0)
+            {
+                onFileWritten?.Invoke(done, files.Count);
+                onBytesWritten?.Invoke(outStream.Position);
+            }
         }
     }
 

@@ -25,12 +25,12 @@ public sealed class GameSnapshot
     private GameSnapshot(
         IReadOnlyList<IdeDefinition> definitions,
         Dictionary<string, ModelWeight> weights,
-        IReadOnlyList<IplInstance> placements,
+        MapCells cells,
         GameDensityBaseline baseline)
     {
         Definitions = definitions;
         Weights = weights;
-        Placements = placements;
+        Cells = cells;
         Baseline = baseline;
     }
 
@@ -40,8 +40,12 @@ public sealed class GameSnapshot
     /// <summary>What each model costs to stream, as the game currently stands.</summary>
     public Dictionary<string, ModelWeight> Weights { get; }
 
-    /// <summary>Every placement on the map, from the text .ipl files and the binary ones in the archives.</summary>
-    public IReadOnlyList<IplInstance> Placements { get; }
+    /// <summary>
+    /// The map as per-cell totals, folded in from the text .ipl files and the binary ones in the
+    /// archives. The placements themselves are not kept — see <see cref="MapCells"/> for why holding
+    /// all 50,982 of them was the largest single allocation SAFT made.
+    /// </summary>
+    public MapCells Cells { get; }
 
     /// <summary>The busiest and heaviest area the game itself ships — the yardstick a mod is judged against.</summary>
     public GameDensityBaseline Baseline { get; }
@@ -51,46 +55,57 @@ public sealed class GameSnapshot
     /// is several seconds of the heaviest work SAFT does, and when a process is killed part way
     /// through it, that trail is the only way to know where.
     /// </summary>
-    public static GameSnapshot Read(string gameRoot, Action<string>? onStep = null)
+    public static GameSnapshot Read(string gameRoot, Action<string>? onStep = null, GameFiles? listing = null)
     {
+        // The game folder is listed ONCE here and handed to everything below. Between them, the
+        // definition search, the asset weighing, the archive search and the .ipl search used to walk
+        // this folder recursively five separate times for a single map read - and two installs have
+        // now stopped dead inside one of those walks. See GameFiles.
+        var files = GameFiles.For(gameRoot, listing, onStep);
+
         onStep?.Invoke("map: reading definitions");
-        var definitions = PlacementDensity.ReadDefinitions(gameRoot);
+        var definitions = PlacementDensity.ReadDefinitions(gameRoot, files);
 
         onStep?.Invoke($"map: {definitions.Count:N0} definition(s); weighing game assets");
-        var weights = PlacementDensity.WeighGameAssets(gameRoot, definitions);
+        var weights = PlacementDensity.WeighGameAssets(gameRoot, definitions, onStep, files);
 
         // Per file, not per loop. Two runs have now stopped dead somewhere inside this loop, and a
         // single breadcrumb around the whole thing cannot say whether the search stalled, or one
         // particular file did, or it was simply grinding. Restored after a refactor dropped it.
         onStep?.Invoke($"map: {weights.Count:N0} weighted model(s); searching for text .ipl files");
-        var iplPaths = IplFile.FindAll(gameRoot);
+        var iplPaths = IplFile.FindAll(gameRoot, files);
 
+        // Folded into per-cell totals one file at a time and then dropped. The previous version built
+        // a single list of all 50,982 placements first and reduced it afterwards, which meant the
+        // largest object SAFT ever allocated existed only to be collapsed into 869 cells.
         onStep?.Invoke($"map: found {iplPaths.Count} text .ipl file(s); parsing them");
-        var placements = new List<IplInstance>();
+        var cells = new MapCells();
         for (var i = 0; i < iplPaths.Count; i++)
         {
             onStep?.Invoke($"map: ipl {i + 1}/{iplPaths.Count} {Path.GetFileName(iplPaths[i])}");
-            try { placements.AddRange(IplFile.Parse(iplPaths[i])); }
+            try { cells.AddRange(IplFile.Parse(iplPaths[i]), weights); }
             catch { /* one unreadable map file must not stop the rest */ }
         }
 
         // The binary .ipl files inside the archives carry about four fifths of the map. Leaving them
         // out put "the heaviest area" at 8.6 MB while the baseline, which does read them, called the
         // same game 32.0 MB — two different answers to one question in a single popup.
-        onStep?.Invoke($"map: {placements.Count:N0} text placement(s); reading binary .ipl from archives");
+        onStep?.Invoke($"map: {cells.TotalPlacements:N0} text placement(s); reading binary .ipl from archives");
         var namesById = PlacementDensity.ModelNamesById(definitions);
-        placements.AddRange(BinaryIplFile.ReadAllFromGame(
-            gameRoot, id => namesById.TryGetValue(id, out var name) ? name : string.Empty));
+        BinaryIplFile.ReadAllFromGame(
+            gameRoot, files,
+            id => namesById.TryGetValue(id, out var name) ? name : string.Empty,
+            instance => cells.Add(instance, weights));
 
-        onStep?.Invoke($"map: {placements.Count:N0} placement(s) total; finding the busiest area");
-        var densest = PlacementDensity.FindDensest(placements, weights);
+        onStep?.Invoke($"map: {cells.TotalPlacements:N0} placement(s) total in {cells.Count:N0} cell(s); finding the busiest area");
+        var densest = cells.Densest(weights);
 
         onStep?.Invoke("map: finding the heaviest area");
-        var heaviest = PlacementDensity.HeaviestCellBytes(placements, weights);
+        var heaviest = cells.HeaviestBytes(weights);
 
         onStep?.Invoke($"map: read complete — busiest {densest?.ObjectCount ?? 0:N0} objects, heaviest {heaviest / 1048576.0:N1} MB");
         return new GameSnapshot(
-            definitions, weights, placements,
+            definitions, weights, cells,
             new GameDensityBaseline(densest?.ObjectCount ?? 0, heaviest));
     }
 }

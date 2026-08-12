@@ -208,6 +208,42 @@ nothing at all.
 
 
 -----------------------------------------------------------------------------------------
+Why your game (and SAFT) can go slow right after installing a mod
+-----------------------------------------------------------------
+
+Installing or uninstalling a mod writes a lot of data to your SD card. When SAFT is finished, your
+card is not.
+
+An SD card has a tiny controller inside it, and writing is not the slow part - erasing is. Reading
+takes microseconds; erasing takes milliseconds, a thousand times longer. A card accepts new data
+quickly into a small fast buffer, and once that buffer fills it has to erase space before it can
+take any more. It keeps doing that clean-up in the background after SAFT has closed, and while it
+does, everything else using that card waits in line behind it.
+
+That is why:
+
+- The game can freeze on a loading screen or fail to load an area if you start it straight after an
+  install. It is waiting on the card, not on a broken file. Wait a minute or two and it will load
+  exactly as it always did. This is what the 60 second timer after an install is for.
+
+- SAFT itself can slow to a crawl if you install or uninstall several mods back to back. So can your
+  file browser, and anything else touching that card. Five to ten minutes clears it.
+
+- One very large mod can do it alone - a 10 GB install can hit this part way through, even on a
+  fresh start.
+
+- Extracting a game is the worst case of all, because that writes over 20,000 separate files rather
+  than a few big ones. Give the card considerably longer after one of those.
+
+How long depends on the card. A fast one may be right again in a minute; a slower or nearly-full one
+takes considerably longer. Cards recover on their own, and only while they are left alone - the best
+thing you can do is nothing.
+
+SAFT will tell you when it sees this happening. If an install writes at a fraction of the speed it
+should, it says so at the end, rather than leaving you wondering whether it froze.
+
+
+-----------------------------------------------------------------------------------------
 Green, Amber and Red: will this mod still render?
 -------------------------------------------------
 

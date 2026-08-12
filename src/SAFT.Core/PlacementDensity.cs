@@ -94,7 +94,7 @@ public static class PlacementDensity
     /// </summary>
     private static readonly ConditionalWeakTable<object, Dictionary<string, long>> TextureBytesCache = new();
 
-    private static Dictionary<string, long> TextureBytesFor(IReadOnlyDictionary<string, ModelWeight> weights) =>
+    internal static Dictionary<string, long> TextureBytesFor(IReadOnlyDictionary<string, ModelWeight> weights) =>
         TextureBytesCache.GetValue(weights, static key =>
         {
             var map = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
@@ -276,11 +276,11 @@ public static class PlacementDensity
     /// and three times inside <see cref="StreamingImpact"/>. That is unnoticeable on a desktop and
     /// most of the wait on an SD card, so the parsed list is passed around instead of the folder path.
     /// </summary>
-    public static List<IdeDefinition> ReadDefinitions(string gameRoot)
+    public static List<IdeDefinition> ReadDefinitions(string gameRoot, GameFiles? files = null)
     {
         var definitions = new List<IdeDefinition>();
 
-        foreach (var path in IdeFile.FindAll(gameRoot))
+        foreach (var path in IdeFile.FindAll(gameRoot, files))
         {
             try
             {
@@ -321,31 +321,57 @@ public static class PlacementDensity
     /// As above, for a caller that has already read the definitions and shouldn't pay for them twice.
     /// </summary>
     public static Dictionary<string, ModelWeight> WeighGameAssets(
-        string gameRoot, IReadOnlyList<IdeDefinition> definitions)
+        string gameRoot, IReadOnlyList<IdeDefinition> definitions, Action<string>? onStep = null,
+        GameFiles? files = null)
     {
         var sizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var found in GameScanner.FindArchives(gameRoot))
+        // Per archive and per phase, because this method is where an install stopped dead for over
+        // three minutes while the app itself stayed alive - and it was the only part of the whole
+        // map read with no breadcrumbs inside it, so the log could say nothing beyond "somewhere in
+        // here". It normally finishes in 0.6-0.9 seconds. Every other opaque stretch in SAFT has
+        // been solved by naming the individual item it was on when it stopped.
+        onStep?.Invoke("weigh: finding archives");
+        var listing = GameFiles.For(gameRoot, files, onStep);
+        var archives = GameScanner.FindArchives(gameRoot, listing);
+
+        onStep?.Invoke($"weigh: {archives.Count} archive(s) to read");
+        for (var i = 0; i < archives.Count; i++)
         {
+            var found = archives[i];
+            onStep?.Invoke($"weigh: archive {i + 1}/{archives.Count} {found.RelativePath} - reading its table");
             try
             {
-                using var archive = ImgArchive.Open(found.AbsolutePath);
-                foreach (var entry in archive.Entries)
+                // The table only. Nothing here reads an entry's contents, so nothing here needs the
+                // archive held open — and this is the line a real device died on.
+                var count = 0;
+                foreach (var entry in ImgArchive.ReadDirectory(found.AbsolutePath))
+                {
                     sizes[entry.Name] = entry.SizeSectors * (long)ImgEntry.SectorSize;
+                    count++;
+                }
+                onStep?.Invoke($"weigh: archive {i + 1}/{archives.Count} {found.RelativePath} - {count:N0} entry/entries");
             }
-            catch
+            catch (Exception ex)
             {
-                // An unreadable archive just leaves those assets unweighed.
+                // An unreadable archive just leaves those assets unweighed. Reported rather than
+                // silently swallowed: a swallowed failure here looks identical to a hang in the log.
+                onStep?.Invoke($"weigh: archive {i + 1}/{archives.Count} {found.RelativePath} - unreadable ({ex.GetType().Name})");
             }
         }
 
-        foreach (var path in Directory.EnumerateFiles(gameRoot, "*", SearchOption.AllDirectories))
+        onStep?.Invoke("weigh: scanning the game folder for loose .dff/.txd");
+        var looseSeen = 0;
+        var looseUsed = 0;
+        foreach (var path in listing.Paths)
         {
+            looseSeen++;
             var name = Path.GetFileName(path);
             if (!name.EndsWith(".dff", StringComparison.OrdinalIgnoreCase) &&
                 !name.EndsWith(".txd", StringComparison.OrdinalIgnoreCase)) continue;
-            if (!sizes.ContainsKey(name)) sizes[name] = new FileInfo(path).Length;
+            if (!sizes.ContainsKey(name)) { sizes[name] = new FileInfo(path).Length; looseUsed++; }
         }
+        onStep?.Invoke($"weigh: {looseSeen:N0} file(s) walked, {looseUsed:N0} loose model/texture(s) weighed; sizing {definitions.Count:N0} definition(s)");
 
         long SizeOf(string fileName) => sizes.TryGetValue(fileName, out var n) ? n : 0;
 
@@ -374,10 +400,10 @@ public static class PlacementDensity
     /// existing game texture costs nothing extra to stream, since the game was already loading it.
     /// </summary>
     public static Dictionary<string, ModelWeight> WeighModFiles(
-        IEnumerable<IdeDefinition> definitions, string modSourceFolder)
+        IEnumerable<IdeDefinition> definitions, string modSourceFolder, GameFiles? modFiles = null)
     {
         var filesByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var path in Directory.EnumerateFiles(modSourceFolder, "*", SearchOption.AllDirectories))
+        foreach (var path in GameFiles.For(modSourceFolder, modFiles).Paths)
             filesByName[Path.GetFileName(path)] = path;
 
         long SizeOf(string fileName) =>

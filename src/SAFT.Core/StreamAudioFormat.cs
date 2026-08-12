@@ -118,14 +118,25 @@ public static class StreamIndex
     /// <summary>
     /// Overwrites a track's Ogg payload (re-encrypted, phased to its absolute file position) and
     /// updates the header's declared length to the new, real size — leftover space up to the
-    /// original allocation is zero-padded (also XOR'd, like the rest of the file). Shared by the
-    /// direct-install tab and extract/rebuild's audio pass. Throws if the new content doesn't fit.
+    /// original allocation is zero-padded (also XOR'd, like the rest of the file). Throws if the new
+    /// content doesn't fit.
+    ///
+    /// Replaces one track's payload, copying the replacement through in chunks rather than holding it
+    /// in memory.
+    ///
+    /// Radio tracks are big: BEATS/Track_002 in a stock game is 6.3 MB. The previous version took the
+    /// whole payload as a byte[] and then XOR-transformed it into ANOTHER array of the same size, so
+    /// installing one track meant two 6.3 MB allocations at once - both far past the 85 KB threshold
+    /// that puts an array on the Large Object Heap, which .NET never compacts. In a 32-bit process
+    /// that is how you fail to allocate while holding 15 MB live, and it killed the app on exactly
+    /// that track, after the eleven smaller ones ahead of it had gone through fine.
     /// </summary>
-    public static void PatchTrack(string stationAbsolutePath, long headerOffset, long originalPayloadLength, byte[] newPayload)
+    public static void PatchTrack(string stationAbsolutePath, long headerOffset, long originalPayloadLength, string newPayloadPath)
     {
-        if (newPayload.Length > originalPayloadLength)
+        var newLength = new FileInfo(newPayloadPath).Length;
+        if (newLength > originalPayloadLength)
             throw new InvalidOperationException(
-                $"New audio ({newPayload.Length} bytes) is larger than the original track's allocated space ({originalPayloadLength} bytes).");
+                $"New audio ({newLength} bytes) is larger than the original track's allocated space ({originalPayloadLength} bytes).");
 
         int lengthSlot;
         using (var readStream = File.OpenRead(stationAbsolutePath))
@@ -135,20 +146,34 @@ public static class StreamIndex
 
         var lengthFieldOffset = GetLengthFieldOffset(headerOffset, lengthSlot);
         writeStream.Position = lengthFieldOffset;
-        writeStream.Write(StreamXor.Transform(BitConverter.GetBytes((uint)newPayload.Length), lengthFieldOffset));
+        writeStream.Write(StreamXor.Transform(BitConverter.GetBytes((uint)newLength), lengthFieldOffset));
 
         var payloadOffset = headerOffset + TrackHeaderSize;
         writeStream.Position = payloadOffset;
-        writeStream.Write(StreamXor.Transform(newPayload, payloadOffset));
 
-        var remaining = originalPayloadLength - newPayload.Length;
+        using (var source = File.OpenRead(newPayloadPath))
+        {
+            var buffer = new byte[81920];
+            var position = payloadOffset;
+            int read;
+            while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                StreamXor.Transform(buffer.AsSpan(0, read), position);
+                writeStream.Write(buffer, 0, read);
+                position += read;
+            }
+        }
+
+        var newPayloadLength = newLength;
+
+        var remaining = originalPayloadLength - newPayloadLength;
         if (remaining > 0)
         {
             // Chunked for the same reason as the archive padding in DirectModInstaller: replacing a
             // long track with a short one leaves a remainder measured in megabytes, and one array
             // that size is a Large Object Heap request on a 32-bit heap. The XOR is position
             // dependent, so each chunk is transformed at its own offset.
-            var padPosition = payloadOffset + newPayload.Length;
+            var padPosition = payloadOffset + newPayloadLength;
             var buffer = new byte[Math.Min(remaining, 81920)];
 
             while (remaining > 0)

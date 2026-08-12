@@ -69,7 +69,7 @@ public static class StreamingImpact
 
         var definitions = snapshot.Definitions;
         var before = snapshot.Weights;
-        var placements = snapshot.Placements;
+        var cells = snapshot.Cells;
         var after = new Dictionary<string, ModelWeight>(before, StringComparer.OrdinalIgnoreCase);
 
         var replacedPlaced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -100,7 +100,7 @@ public static class StreamingImpact
         var heaviestBefore = snapshot.Baseline.BusiestBytes;
 
         onStep?.Invoke($"measure: heaviest area now {heaviestBefore / 1048576.0:N1} MB; weighing it with the mod applied");
-        var heaviestAfter = HeaviestArea(placements, after);
+        var heaviestAfter = cells.HeaviestBytes(after);
 
         onStep?.Invoke($"measure: heaviest area after {heaviestAfter / 1048576.0:N1} MB; totalling dynamic weight");
         return new StreamingImpactReport(
@@ -111,14 +111,6 @@ public static class StreamingImpact
             replacedPlaced.Count,
             replacedDynamic.Count);
     }
-
-    /// <summary>
-    /// Heaviest single area of map, in bytes. One pass over the placements - see
-    /// PlacementDensity.HeaviestCellBytes for why grouping first and asking per cell was the thing
-    /// generating almost all of SAFT's allocation churn.
-    /// </summary>
-    private static long HeaviestArea(IReadOnlyList<IplInstance> placements, IReadOnlyDictionary<string, ModelWeight> weights) =>
-        PlacementDensity.HeaviestCellBytes(placements, weights);
 
     /// <summary>
     /// Total weight of everything the game spawns rather than places. Each model and each texture

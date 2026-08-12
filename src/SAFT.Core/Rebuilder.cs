@@ -216,10 +216,16 @@ public static class Rebuilder
                 if (!File.Exists(oggPath)) continue;
 
                 var (offset, payloadLength) = station.Tracks[trackNum - 1];
-                var newPayload = File.ReadAllBytes(oggPath);
-                if (!StreamIndex.LooksLikeOgg(newPayload)) continue; // not a valid Ogg replacement; leave the original track as-is
 
-                try { StreamIndex.PatchTrack(destPath, offset, payloadLength, newPayload); }
+                // Four bytes, not the whole track. Radio tracks run to several megabytes and reading
+                // one entirely to check its first four bytes is the kind of allocation that killed
+                // the install path on a 32-bit heap.
+                byte[] head = new byte[4];
+                using (var probe = File.OpenRead(oggPath))
+                    if (probe.Read(head, 0, 4) != 4 || !StreamIndex.LooksLikeOgg(head))
+                        continue; // not a valid Ogg replacement; leave the original track as-is
+
+                try { StreamIndex.PatchTrack(destPath, offset, payloadLength, oggPath); }
                 catch (InvalidOperationException) { /* larger than the original allocation; leave that track as-is */ }
             }
         }

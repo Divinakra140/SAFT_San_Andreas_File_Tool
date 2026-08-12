@@ -113,14 +113,35 @@ public sealed class SfxBank
     /// <summary>Absolute byte offset of a sound's raw PCM data within the package file.</summary>
     public long GetPcmOffset(int soundIndex) => HeaderOffset + SfxIndex.BankHeaderSize + Sounds[soundIndex].BufferOffset;
 
-    /// <summary>Byte length of a sound's raw PCM data: up to the next sound's offset, or the end of the bank for the last one.</summary>
+    /// <summary>
+    /// Byte length of a sound's raw PCM data: up to the next sound's offset, or the end of the bank
+    /// for the last one. Returns 0 when the bank's own numbers do not agree with each other.
+    ///
+    /// The arithmetic is done in long, and clamped, because both were uint before and 9 of this
+    /// game's 61,993 sounds underflow. In every case it is the LAST sound in its bank, whose buffer
+    /// offset sits past where BankLkup.dat says the bank ends - FEET bank 4, GENRL banks 13/57/127/137,
+    /// SCRIPT banks 2/76 and others. Subtracting there went negative, and negative in uint is about
+    /// 4.29 billion.
+    ///
+    /// That number was not harmless. It is stored as the sound's "original length", which decides
+    /// <see cref="DirectAudioMatch.Fits"/> - so every replacement looked like it fitted - and
+    /// <see cref="PatchSound"/> zero-fills the difference between the original and the replacement,
+    /// which would have written roughly 4 GB of zeros over the package. What actually happened in
+    /// practice was an OverflowException while allocating the backup buffer, which is only reached
+    /// first because backups are mandatory. The "replace without backups" option that 2.0 removed
+    /// was the only thing standing between this and a destroyed audio file.
+    ///
+    /// Clamping to 0 is the safe direction: a zero-length sound cannot be replaced by anything, so
+    /// SAFT reports it as not fitting and leaves it alone, rather than crashing or writing.
+    /// </summary>
     public long GetPcmLength(int soundIndex)
     {
-        var start = Sounds[soundIndex].BufferOffset;
-        var end = soundIndex + 1 < Sounds.Count
+        long start = Sounds[soundIndex].BufferOffset;
+        long end = soundIndex + 1 < Sounds.Count
             ? Sounds[soundIndex + 1].BufferOffset
-            : (uint)(BankLength - SfxIndex.BankHeaderSize);
-        return end - start;
+            : BankLength - SfxIndex.BankHeaderSize;
+
+        return Math.Max(0, end - start);
     }
 
     private static void ReadExact(Stream stream, byte[] buffer)

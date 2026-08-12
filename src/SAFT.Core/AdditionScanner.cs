@@ -65,18 +65,28 @@ public static class AdditionScanner
     /// covering both archive entries and unarchived files — that single question is what separates
     /// a replacement from an addition.
     /// </summary>
+    /// <param name="modFiles">
+    /// The mod folder's listing, walked once by the caller and shared. A reinstall scans the mod
+    /// folder a second time — the answer to "is this new" changes when the old copy comes out, even
+    /// though the files do not — and SAFT hung on a real device inside that second walk. See GameFiles.
+    /// </param>
     public static AdditionPlan Scan(
         string gameRoot,
         string modSourceFolder,
         Func<string, bool> existsInGame,
         GameDensityBaseline? baseline = null,
-        IReadOnlySet<int>? usedObjectIds = null)
+        IReadOnlySet<int>? usedObjectIds = null,
+        Action<string>? onStep = null,
+        GameFiles? modFiles = null)
     {
+        onStep?.Invoke("additions: reading the mod folder");
         var definitions = new List<IdeDefinition>();
         var placements = new List<IplInstance>();
         var newAssets = new List<NewAsset>();
 
-        foreach (var path in Directory.EnumerateFiles(modSourceFolder, "*", SearchOption.AllDirectories))
+        var listing = GameFiles.For(modSourceFolder, modFiles, onStep);
+
+        foreach (var path in listing.Paths)
         {
             var fileName = Path.GetFileName(path);
             if (FileFilters.IsIgnoredFile(fileName)) continue;
@@ -154,13 +164,18 @@ public static class AdditionScanner
             .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        onStep?.Invoke($"additions: {newAssets.Count} new asset(s), {definitions.Count} definition(s), {placements.Count} placement(s); working out free object slots");
         var used = usedObjectIds ?? ObjectIdAllocator.ScanUsedIds(gameRoot);
         var slotsAvailable = ObjectIdAllocator.Describe(used).TotalFree;
 
+        onStep?.Invoke($"additions: {slotsAvailable:N0} slot(s) free; measuring the game baseline");
         var resolvedBaseline = baseline ?? PlacementDensity.MeasureGameBaseline(gameRoot);
-        var weights = PlacementDensity.WeighModFiles(definitions, modSourceFolder);
+
+        onStep?.Invoke("additions: weighing the mod's own files");
+        var weights = PlacementDensity.WeighModFiles(definitions, modSourceFolder, listing);
         var density = PlacementDensity.Analyse(placements, resolvedBaseline, weights);
 
+        onStep?.Invoke("additions: scan complete");
         return new AdditionPlan(
             definitions, placements, newAssets, modelsWithoutCollision, slotsAvailable, density,
             collision, walkThroughModels);

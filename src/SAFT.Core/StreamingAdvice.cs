@@ -175,6 +175,30 @@ public static class StreamingAdvice
     };
 
     /// <summary>
+    /// The verdict for a mod that contains nothing the weight and density checks can measure — see
+    /// <see cref="ModContent.AffectsStreaming"/>. A pure sound pack is the usual case.
+    ///
+    /// Says plainly that the checks were not run, rather than reporting zeroes as if they were
+    /// measurements. Those two are very different claims and only one of them is true: SAFT has not
+    /// weighed this player's game here, so it must not imply the game came back healthy — it can
+    /// only say that nothing in this mod moves those numbers, which is a fact about the mod.
+    /// </summary>
+    public static StreamingVerdict ComposeWithoutStreamingContent()
+    {
+        var lines = new List<string>
+        {
+            "This mod contains no models, textures, collision, animations or map data — the file " +
+            "types these checks measure — so there is nothing here that can change what your game " +
+            "has to load. The weight and density checks do not apply to it and were not run.",
+
+            "Sounds and music are replaced inside the space the original already used, so they " +
+            "cannot add to the streaming load either.",
+        };
+
+        return new StreamingVerdict(true, string.Join("\n\n", lines), StreamingSeverity.Fine);
+    }
+
+    /// <summary>
     /// <paramref name="gameBaseline"/> is the player's game as it stands. Everything else here
     /// judges the MOD; this judges what it is being added to, which is the one thing the rest of the
     /// report quietly assumes is normal.

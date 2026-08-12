@@ -56,6 +56,26 @@ internal static class ActivityLog
         Note($"session started - SAFT {version}, {Environment.OSVersion}, " +
              $"{(Environment.Is64BitProcess ? "64" : "32")}-bit, exe folder {Program.ExeFolder}");
 
+        // What the runtime believes it has to work with. Five crashes have now killed this process
+        // without a single managed exception reaching the handlers in Program - no OutOfMemory, no
+        // stack trace, nothing - which means the CLR never saw a failure and something outside it
+        // ended the process. If that something is a memory ceiling, this is the number that shows it.
+        //
+        // Written once at startup rather than per line. An earlier attempt logged
+        // Process.GetCurrentProcess() on every entry; under Winlator it returned 0 and the build died
+        // sooner than before, so this stays to the managed runtime's own view and happens once.
+        try
+        {
+            var info = GC.GetGCMemoryInfo();
+            Note($"runtime memory: {info.TotalAvailableMemoryBytes / 1048576.0:N0} MB available to the GC, " +
+                 $"{(Environment.Is64BitProcess ? "64" : "32")}-bit address space, " +
+                 $"{Environment.ProcessorCount} cpu(s)");
+        }
+        catch
+        {
+            // Never let a diagnostic be the reason the app fails to start.
+        }
+
         if (PreviousSessionDiedSilently)
             Note("NOTE: the previous session never logged a clean exit - see the lines above this session header");
     }

@@ -19,15 +19,19 @@ public static class UnarchivedIndex
     /// entry because San Andreas genuinely ships duplicate names in different folders (the
     /// data/Decision/*.ped files also appear under data/Decision/Allowed/).
     /// </summary>
-    public static Dictionary<string, List<UnarchivedFile>> Build(string gameRoot)
+    public static Dictionary<string, List<UnarchivedFile>> Build(string gameRoot, GameFiles? files = null)
     {
+        // One listing serves both the archive search and the walk below, which between them used to
+        // enumerate this folder twice for a single call. See GameFiles.
+        var listing = GameFiles.For(gameRoot, files);
+
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var archive in GameScanner.FindArchives(gameRoot)) excluded.Add(archive.AbsolutePath);
+        foreach (var archive in GameScanner.FindArchives(gameRoot, listing)) excluded.Add(archive.AbsolutePath);
         foreach (var pkg in SfxIndex.Load(gameRoot)) excluded.Add(pkg.AbsolutePath);
         foreach (var station in StreamIndex.Load(gameRoot)) excluded.Add(station.AbsolutePath);
 
         var index = new Dictionary<string, List<UnarchivedFile>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var path in Directory.EnumerateFiles(gameRoot, "*", SearchOption.AllDirectories))
+        foreach (var path in listing.Paths)
         {
             if (excluded.Contains(path)) continue;
 

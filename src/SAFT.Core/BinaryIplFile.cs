@@ -59,8 +59,23 @@ public static class BinaryIplFile
     public static IReadOnlyList<IplInstance> ReadAllFromGame(string gameRoot, Func<int, string> nameForId)
     {
         var all = new List<IplInstance>();
+        ReadAllFromGame(gameRoot, null, nameForId, all.Add);
+        return all;
+    }
 
-        foreach (var found in GameScanner.FindArchives(gameRoot))
+    /// <summary>
+    /// As above, but hands each placement to <paramref name="onInstance"/> and keeps none.
+    ///
+    /// The binary .ipl files hold about four fifths of the San Andreas map — roughly 40,000 of its
+    /// 50,982 placements — and the list-returning version above built every one of them before the
+    /// caller could reduce them. That single list was the largest allocation SAFT made, on a 32-bit
+    /// heap that is never compacted, and it was built on every install. A caller that only wants
+    /// per-cell totals should take them one at a time through here.
+    /// </summary>
+    public static void ReadAllFromGame(
+        string gameRoot, GameFiles? files, Func<int, string> nameForId, Action<IplInstance> onInstance)
+    {
+        foreach (var found in GameScanner.FindArchives(gameRoot, files))
         {
             try
             {
@@ -72,7 +87,7 @@ public static class BinaryIplFile
                     using var stream = archive.OpenEntry(entry);
                     using var buffer = new MemoryStream();
                     stream.CopyTo(buffer);
-                    all.AddRange(Read(buffer.ToArray(), nameForId));
+                    foreach (var instance in Read(buffer.ToArray(), nameForId)) onInstance(instance);
                 }
             }
             catch
@@ -81,7 +96,5 @@ public static class BinaryIplFile
                 // refusing to report anything at all.
             }
         }
-
-        return all;
     }
 }

@@ -1,12 +1,25 @@
 namespace SAFT.Core;
 
 /// <summary>What removing a mod's additions actually did, including anything deliberately left alone.</summary>
+/// <param name="DeferredEntryRemovals">
+/// Entries that were NOT taken out here because their archive was deferred, keyed by archive relative
+/// path. The caller is expected to hand these to <see cref="AdditionInstaller.Apply"/> so they come out
+/// during its rewrite instead. They are not counted in <see cref="ArchiveEntriesRemoved"/>: nothing has
+/// been removed yet.
+/// </param>
+/// <param name="DeferredCollisionPrunes">
+/// Collision records that still have to come out of a bundle in a deferred archive, keyed by bundle
+/// name. Handed over the same way — losing these would leave another mod's or Rockstar's bundle
+/// carrying records for a mod that is no longer installed.
+/// </param>
 public sealed record AdditionRemovalResult(
     IReadOnlyList<string> RemovedMods,
     IReadOnlyList<string> Skipped,
     int ArchiveEntriesRemoved,
     int DataLinesRemoved,
-    IReadOnlyList<int> FreedObjectIds);
+    IReadOnlyList<int> FreedObjectIds,
+    IReadOnlyDictionary<string, IReadOnlySet<string>> DeferredEntryRemovals,
+    IReadOnlyDictionary<string, IReadOnlySet<string>> DeferredCollisionPrunes);
 
 /// <summary>
 /// Takes back out what <see cref="AdditionInstaller"/> put in.
@@ -19,14 +32,40 @@ public sealed record AdditionRemovalResult(
 /// </summary>
 public static class AdditionUninstaller
 {
+    /// <param name="deferRebuildsFor">
+    /// Archives this removal must NOT rewrite. Everything else it does — the map data, the manifest,
+    /// the freed object ids — happens as usual; what would have been rewritten out of those archives
+    /// comes back in the result for the caller to hand to whoever IS rewriting them. Reinstalling used
+    /// to write models\gta3.img out twice, 940 MB each time, because removing the old copy and adding
+    /// the new one each rebuilt it in full. Same fold as the replacement one, from the other side.
+    /// </param>
+    /// <param name="onStep">
+    /// Phase-level breadcrumbs for the activity log. Removal used to run from its first line to its
+    /// archive rewrite without saying anything, and a run died inside that silence - so the log's
+    /// last word was the caller announcing removal was about to start, and everything from the
+    /// manifest read to the verification was one indistinguishable gap.
+    /// </param>
     public static AdditionRemovalResult Remove(
         string gameRoot,
         AdditionsManifest manifest,
         IEnumerable<string> modNames,
-        IProgress<AdditionProgress>? progress = null)
+        IProgress<AdditionProgress>? progress = null,
+        IReadOnlySet<string>? deferRebuildsFor = null,
+        Action<string>? onStep = null,
+        StorageSpeed? speed = null)
     {
+        // Throttled at the door, exactly as every other writer in SAFT does it — this was the ONE
+        // path that never got it. Removing a mod rewrites the whole archive, reporting once per
+        // entry, so on a real device it marshalled 16,316 progress updates onto the UI thread
+        // through Wine and crawled: about 300 entries a minute, where the same archive had been
+        // rewritten in 36 seconds minutes earlier. That is roughly 285 KB/s, which no SD card
+        // produces — it was never the card, it was this. See ThrottledProgress, and the identical
+        // comment in AdditionInstaller/Extractor/DirectModInstaller/ModInstaller/Rebuilder.
+        progress = new ThrottledProgress<AdditionProgress>(progress);
+
         var wanted = new HashSet<string>(modNames, StringComparer.OrdinalIgnoreCase);
         var mods = manifest.Mods.Where(m => wanted.Contains(m.Name)).ToList();
+        onStep?.Invoke($"removal: starting for {mods.Count} mod(s)");
 
         var removedMods = new List<string>();
         var skipped = new List<string>();
@@ -42,18 +81,27 @@ public static class AdditionUninstaller
 
         foreach (var mod in mods)
         {
-            foreach (var entry in mod.ArchiveEntries)
+            // Grouped by archive so each one is OPENED ONCE for all of this mod's entries. It used to
+            // be opened once per entry - seven separate opens of a 940 MB file to check seven small
+            // ones - and every open means a stat and a fresh handle through Wine's filesystem
+            // translation onto an SD card. A run died in this exact window, in a step the log had
+            // nothing to say about. Whether that is why, nobody knows; six opens that did not need to
+            // happen are worth removing either way.
+            foreach (var group in mod.ArchiveEntries.GroupBy(
+                         e => e.ArchiveRelativePath, StringComparer.OrdinalIgnoreCase))
             {
-                if (!VerifyArchiveEntry(gameRoot, entry, out var reason))
-                {
-                    skipped.Add($"{entry.EntryName}: {reason}");
-                    continue;
-                }
+                var entries = group.ToList();
+                onStep?.Invoke($"removal: checking {entries.Count} entry/entries in {group.Key} are still SAFT's");
 
-                if (!entriesToRemove.TryGetValue(entry.ArchiveRelativePath, out var set))
-                    entriesToRemove[entry.ArchiveRelativePath] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                set.Add(entry.EntryName);
+                foreach (var name in VerifyArchiveEntries(gameRoot, group.Key, entries, skipped))
+                {
+                    if (!entriesToRemove.TryGetValue(group.Key, out var set))
+                        entriesToRemove[group.Key] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    set.Add(name);
+                }
             }
+
+            onStep?.Invoke($"removal: '{mod.Name}' - taking out its map data lines");
 
             foreach (var added in mod.Collisions)
             {
@@ -73,13 +121,32 @@ public static class AdditionUninstaller
         if (collisionToRemove.Count > 0) archives.Add(AdditionInstaller.DefaultArchiveRelativePath);
 
         var entriesRemoved = 0;
+        var deferredEntries = new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
+        var deferredCollision = new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var archiveRelativePath in archives)
         {
             entriesToRemove.TryGetValue(archiveRelativePath, out var names);
+            names ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            if (deferRebuildsFor is not null && deferRebuildsFor.Contains(archiveRelativePath))
+            {
+                onStep?.Invoke(
+                    $"removal: {names.Count} entry/entries in {archiveRelativePath} handed on rather than rewritten here");
+
+                // Handed over rather than done here. Both halves have to go: the entries AND the
+                // collision records, since the records live inside an entry that is being carried
+                // across by whoever does the rewrite. Only what was verified above is handed over —
+                // an entry the user has changed since installing was already skipped and stays put.
+                if (names.Count > 0) deferredEntries[archiveRelativePath] = names;
+                foreach (var bundle in collisionToRemove)
+                    deferredCollision[bundle.Key] = new HashSet<string>(bundle.Value, StringComparer.OrdinalIgnoreCase);
+                continue;
+            }
+
+            onStep?.Invoke($"removal: rewriting {archiveRelativePath} without {names.Count} entry/entries");
             entriesRemoved += RebuildArchiveWithout(
-                gameRoot, archiveRelativePath,
-                names ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-                collisionToRemove, skipped, progress);
+                gameRoot, archiveRelativePath, names, collisionToRemove, skipped, progress, speed);
         }
 
         foreach (var mod in mods) manifest.Mods.Remove(mod);
@@ -88,54 +155,74 @@ public static class AdditionUninstaller
         // left that depends on it — removing it early would stop other mods' objects loading.
         if (manifest.Mods.Count == 0) RemoveGtaDatRegistration(gameRoot);
 
-        return new AdditionRemovalResult(removedMods, skipped, entriesRemoved, linesRemoved, freedIds);
+        onStep?.Invoke(
+            $"removal: complete - {removedMods.Count} mod(s), {entriesRemoved} entry/entries removed here, " +
+            $"{linesRemoved} map line(s), {skipped.Count} left alone");
+
+        return new AdditionRemovalResult(
+            removedMods, skipped, entriesRemoved, linesRemoved, freedIds, deferredEntries, deferredCollision);
     }
 
     /// <summary>
-    /// Confirms an archive entry is still byte-for-byte what SAFT put there. If the user has since
-    /// replaced it — installed another mod over the top, or edited it — deleting it would destroy
-    /// work SAFT never did, so it's left in place and reported instead.
+    /// Confirms each entry is still byte-for-byte what SAFT put there, and returns the names of the
+    /// ones that are. If the user has since replaced one — installed another mod over the top, or
+    /// edited it — deleting it would destroy work SAFT never did, so it's left in place and reported.
+    ///
+    /// Takes the whole list for one archive rather than a single entry, because the archive is opened
+    /// to answer the question and a 940 MB file should be opened once for seven answers, not seven
+    /// times for one each.
     /// </summary>
-    private static bool VerifyArchiveEntry(string gameRoot, AddedArchiveEntry entry, out string reason)
+    private static List<string> VerifyArchiveEntries(
+        string gameRoot, string archiveRelativePath, IReadOnlyList<AddedArchiveEntry> entries,
+        List<string> skipped)
     {
-        var archivePath = Path.Combine(gameRoot, entry.ArchiveRelativePath);
+        var verified = new List<string>();
+        var archivePath = Path.Combine(gameRoot, archiveRelativePath);
+
         if (!File.Exists(archivePath))
         {
-            reason = "the archive it was added to no longer exists";
-            return false;
+            foreach (var entry in entries)
+                skipped.Add($"{entry.EntryName}: the archive it was added to no longer exists");
+            return verified;
         }
 
         try
         {
             using var archive = ImgArchive.Open(archivePath);
-            var found = archive.Entries.FirstOrDefault(
-                e => e.Name.Equals(entry.EntryName, StringComparison.OrdinalIgnoreCase));
-            if (found is null)
+
+            // Looked up by name rather than scanned per entry: the directory table holds 16,316 of
+            // them in a stock gta3.img.
+            var byName = new Dictionary<string, ImgEntry>(StringComparer.OrdinalIgnoreCase);
+            foreach (var e in archive.Entries) byName.TryAdd(e.Name, e);
+
+            foreach (var entry in entries)
             {
-                reason = "it is no longer in the archive";
-                return false;
+                if (!byName.TryGetValue(entry.EntryName, out var found))
+                {
+                    skipped.Add($"{entry.EntryName}: it is no longer in the archive");
+                    continue;
+                }
+
+                // ComputeSha256 ignores trailing zeros on both sides, so the sector padding an archive
+                // adds doesn't make an untouched asset look modified.
+                if (AdditionsManifest.ComputeSha256(ReadEntry(archive, found)) != entry.Sha256)
+                {
+                    skipped.Add($"{entry.EntryName}: it has been changed since SAFT added it, so it was left in place");
+                    continue;
+                }
+
+                verified.Add(entry.EntryName);
             }
-
-            using var stream = archive.OpenEntry(found);
-            using var buffer = new MemoryStream();
-            stream.CopyTo(buffer);
-
-            // ComputeSha256 ignores trailing zeros on both sides, so the sector padding an archive
-            // adds doesn't make an untouched asset look modified.
-            if (AdditionsManifest.ComputeSha256(buffer.ToArray()) != entry.Sha256)
-            {
-                reason = "it has been changed since SAFT added it, so it was left in place";
-                return false;
-            }
-
-            reason = string.Empty;
-            return true;
         }
         catch (Exception ex)
         {
-            reason = ex.Message;
-            return false;
+            // One failure to read the archive answers for every entry in it - the same message each
+            // entry would have reported on its own.
+            foreach (var entry in entries) skipped.Add($"{entry.EntryName}: {ex.Message}");
+            return new List<string>();
         }
+
+        return verified;
     }
 
     /// <summary>
@@ -188,7 +275,8 @@ public static class AdditionUninstaller
         ISet<string> names,
         IReadOnlyDictionary<string, HashSet<string>> collisionToRemove,
         List<string> skipped,
-        IProgress<AdditionProgress>? progress)
+        IProgress<AdditionProgress>? progress,
+        StorageSpeed? speed = null)
     {
         var archivePath = Path.Combine(gameRoot, archiveRelativePath);
         if (!File.Exists(archivePath)) return 0;
@@ -210,7 +298,8 @@ public static class AdditionUninstaller
 
                 if (collisionToRemove.TryGetValue(entry.Name, out var records))
                 {
-                    var pruned = PruneCollision(archive, entry, records, skipped, ref prunedRecords);
+                    var pruned = PruneCollision(ReadEntry(archive, entry), entry.Name, records, skipped, out var count);
+                    prunedRecords += count;
                     keep.Add((entry.Name, () => new MemoryStream(pruned, writable: false)));
                 }
                 else
@@ -226,11 +315,21 @@ public static class AdditionUninstaller
 
             ImgArchive.Write(rebuilt, keep,
                 (done, total) => progress?.Report(new AdditionProgress("Removing added assets from the archive", done, total)),
-                (done, total) => progress?.Report(new AdditionProgress("Reading the existing archive", done, total)));
+                (done, total) => progress?.Report(new AdditionProgress("Reading the existing archive", done, total)),
+                speed is null ? null : speed.Sample);
         }
 
         FileReplace.MoveOver(rebuilt, archivePath);
         return removed;
+    }
+
+    /// <summary>Reads a whole entry into memory. Only used for collision bundles, which are small.</summary>
+    internal static byte[] ReadEntry(ImgArchive archive, ImgEntry entry)
+    {
+        using var stream = archive.OpenEntry(entry);
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
     }
 
     /// <summary>
@@ -240,29 +339,30 @@ public static class AdditionUninstaller
     /// Same rule as everywhere else in uninstall: a record that isn't there any more is reported
     /// rather than treated as an error, because another tool having already removed it is not a
     /// failure worth stopping for.
+    ///
+    /// Shared with <see cref="AdditionInstaller"/>: when a reinstall folds removal and addition into
+    /// one rewrite, the same pruning has to happen there instead, on the way past the bundle.
     /// </summary>
-    private static byte[] PruneCollision(
-        ImgArchive archive, ImgEntry entry, ISet<string> records, List<string> skipped, ref int pruned)
+    internal static byte[] PruneCollision(
+        byte[] original, string bundleName, IReadOnlyCollection<string> records,
+        ICollection<string> skipped, out int pruned)
     {
-        byte[] original;
-        using (var stream = archive.OpenEntry(entry))
-        using (var buffer = new MemoryStream())
-        {
-            stream.CopyTo(buffer);
-            original = buffer.ToArray();
-        }
-
+        pruned = 0;
         var kept = new List<ColRecord>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Copied into a case-insensitive set rather than searched as it arrives: model names are
+        // matched case-insensitively everywhere else, and a plain Contains on the caller's
+        // collection would quietly become a case-SENSITIVE comparison.
+        var wanted = new HashSet<string>(records, StringComparer.OrdinalIgnoreCase);
 
         foreach (var record in ColBundle.Read(original))
         {
-            if (records.Contains(record.Name)) { seen.Add(record.Name); pruned++; continue; }
+            if (wanted.Contains(record.Name)) { seen.Add(record.Name); pruned++; continue; }
             kept.Add(record);
         }
 
         foreach (var missing in records.Where(r => !seen.Contains(r)))
-            skipped.Add($"collision for '{missing}' was already gone from {entry.Name}");
+            skipped.Add($"collision for '{missing}' was already gone from {bundleName}");
 
         return ColBundle.Write(kept);
     }

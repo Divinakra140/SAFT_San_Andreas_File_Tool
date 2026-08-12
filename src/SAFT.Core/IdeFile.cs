@@ -94,8 +94,8 @@ public static class IdeFile
     }
 
     /// <summary>Every .ide file under a game folder or extracted install, in a stable order.</summary>
-    public static IReadOnlyList<string> FindAll(string root) =>
-        Directory.EnumerateFiles(root, "*.ide", SearchOption.AllDirectories)
+    public static IReadOnlyList<string> FindAll(string root, GameFiles? files = null) =>
+        GameFiles.For(root, files).WithExtension(".ide")
             .Where(p => !FileFilters.IsIgnoredFile(Path.GetFileName(p)))
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
