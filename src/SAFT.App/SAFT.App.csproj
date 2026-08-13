@@ -20,7 +20,37 @@
     <RootNamespace>SAFT.App</RootNamespace>
     <!-- Shows up in the exe's Properties > Details, so a downloaded copy can be identified on
          sight. Keep in step with the window title in MainForm.Layout.cs and the GitHub release tag. -->
-    <Version>2.1.2</Version>
+    <Version>2.1.3</Version>
+
+    <!--
+      Compile ahead of time instead of at runtime.
+
+      An Android bug report taken at the moment of a crash showed what SAFT actually does on that
+      platform: 519 separate "execute" grants from the .NET tiered compilation threads, each one the
+      JIT writing machine code into a temp mapping inside the wineserver directory and asking to run
+      it. Android forbids writing and executing the same memory, so every method compiled at runtime
+      becomes a file mapping, a permission check, and a remap - through Wine, on a translation layer
+      that is itself turning x86 into ARM.
+
+      The same report ruled out everything else: no low-memory kill, no phantom-process trim, no
+      tombstone, no signal. Android never killed SAFT - the process simply ended, 33 milliseconds
+      after its last log line. A JIT that cannot map executable memory takes a process down exactly
+      like that: instantly, with no managed exception for the runtime to report.
+
+      ReadyToRun precompiles the IL to native code at build time, so the overwhelming majority of
+      methods are ready to run as they are and the JIT is left with far less to do. Costs about
+      10% more file size, which for a tool downloaded once is nothing.
+
+      HONEST RESULT: this did what it claimed and did NOT fix the crashes. Measured in Android bug
+      reports taken at the moment of death, execute-grants for runtime-compiled code fell from 519 a
+      session to 358, and to 147 when tiered recompilation was also disabled - and the process still
+      died, sooner, somewhere else entirely. Disabling tiering was reverted for that reason: no
+      evidence of benefit, and it makes the first call to anything without precompiled code slower.
+      ReadyToRun is kept only because doing less work at runtime is defensible on its own; it is not
+      a fix and should not be described as one.
+    -->
+    <PublishReadyToRun>true</PublishReadyToRun>
+
     <Product>SAFT — San Andreas File Tool</Product>
     <Company>Divinakra</Company>
   </PropertyGroup>

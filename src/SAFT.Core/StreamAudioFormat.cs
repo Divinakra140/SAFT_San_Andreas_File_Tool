@@ -131,17 +131,28 @@ public static class StreamIndex
     /// that is how you fail to allocate while holding 15 MB live, and it killed the app on exactly
     /// that track, after the eleven smaller ones ahead of it had gone through fine.
     /// </summary>
-    public static void PatchTrack(string stationAbsolutePath, long headerOffset, long originalPayloadLength, string newPayloadPath)
+    /// <param name="onStep">
+    /// Breadcrumbs INSIDE one track. Two separate freezes have now stopped on the same line - track
+    /// 11 of 12, the largest track in the set - with the log unable to say whether it was opening the
+    /// station, finding the header slot, or writing the payload. Each of those is a different
+    /// explanation, and one line per track cannot tell them apart.
+    /// </param>
+    public static void PatchTrack(
+        string stationAbsolutePath, long headerOffset, long originalPayloadLength, string newPayloadPath,
+        Action<string>? onStep = null)
     {
+        var station = Path.GetFileName(stationAbsolutePath);
         var newLength = new FileInfo(newPayloadPath).Length;
         if (newLength > originalPayloadLength)
             throw new InvalidOperationException(
                 $"New audio ({newLength} bytes) is larger than the original track's allocated space ({originalPayloadLength} bytes).");
 
+        onStep?.Invoke($"stream: opening {station} to read its header");
         int lengthSlot;
         using (var readStream = File.OpenRead(stationAbsolutePath))
             lengthSlot = FindActiveLengthSlot(readStream, headerOffset);
 
+        onStep?.Invoke($"stream: opening {station} to write");
         using var writeStream = new FileStream(stationAbsolutePath, FileMode.Open, FileAccess.Write, FileShare.Read);
 
         var lengthFieldOffset = GetLengthFieldOffset(headerOffset, lengthSlot);
@@ -151,6 +162,7 @@ public static class StreamIndex
         var payloadOffset = headerOffset + TrackHeaderSize;
         writeStream.Position = payloadOffset;
 
+        onStep?.Invoke($"stream: writing {newLength:N0} bytes into {station}");
         using (var source = File.OpenRead(newPayloadPath))
         {
             var buffer = new byte[81920];
@@ -167,6 +179,7 @@ public static class StreamIndex
         var newPayloadLength = newLength;
 
         var remaining = originalPayloadLength - newPayloadLength;
+        onStep?.Invoke($"stream: payload written to {station}, {remaining:N0} byte(s) to pad");
         if (remaining > 0)
         {
             // Chunked for the same reason as the archive padding in DirectModInstaller: replacing a

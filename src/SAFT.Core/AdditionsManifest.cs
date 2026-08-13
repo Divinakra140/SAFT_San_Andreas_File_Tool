@@ -73,16 +73,13 @@ public sealed class AdditionsManifest
     public required string GameRootPath { get; init; }
     public List<AddedMod> Mods { get; init; } = new();
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     public void Save(string backupFolder)
     {
         Directory.CreateDirectory(backupFolder);
-        File.WriteAllText(Path.Combine(backupFolder, FileName), JsonSerializer.Serialize(this, JsonOptions));
+        // Source-generated, not reflected over - see SaftJsonContext for the 800 millisecond reason.
+        File.WriteAllText(
+            Path.Combine(backupFolder, FileName),
+            JsonSerializer.Serialize(this, SaftJsonContext.Default.AdditionsManifest));
     }
 
     /// <summary>Loads the manifest from a backup folder, or null if that folder holds no record of additions.</summary>
@@ -91,7 +88,7 @@ public sealed class AdditionsManifest
         var path = Path.Combine(backupFolder, FileName);
         if (!File.Exists(path)) return null;
 
-        var manifest = JsonSerializer.Deserialize<AdditionsManifest>(File.ReadAllText(path))
+        var manifest = JsonSerializer.Deserialize(File.ReadAllText(path), SaftJsonContext.Default.AdditionsManifest)
             ?? throw new InvalidDataException($"'{path}' could not be read as a SAFT additions record.");
 
         if (manifest.FormatVersion > CurrentFormatVersion)

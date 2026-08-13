@@ -69,6 +69,10 @@ public static class AdditionUninstaller
 
         var removedMods = new List<string>();
         var skipped = new List<string>();
+
+        // Mods that came out only partly, and the assets of theirs still sitting in the game. These
+        // stay on the record rather than being struck off it — see where the record is rewritten.
+        var retained = new Dictionary<AddedMod, List<AddedArchiveEntry>>();
         var freedIds = new List<int>();
         var linesRemoved = 0;
 
@@ -87,13 +91,15 @@ public static class AdditionUninstaller
             // translation onto an SD card. A run died in this exact window, in a step the log had
             // nothing to say about. Whether that is why, nobody knows; six opens that did not need to
             // happen are worth removing either way.
+            var stillInTheGame = new List<AddedArchiveEntry>();
+
             foreach (var group in mod.ArchiveEntries.GroupBy(
                          e => e.ArchiveRelativePath, StringComparer.OrdinalIgnoreCase))
             {
                 var entries = group.ToList();
                 onStep?.Invoke($"removal: checking {entries.Count} entry/entries in {group.Key} are still SAFT's");
 
-                foreach (var name in VerifyArchiveEntries(gameRoot, group.Key, entries, skipped))
+                foreach (var name in VerifyArchiveEntries(gameRoot, group.Key, entries, skipped, stillInTheGame))
                 {
                     if (!entriesToRemove.TryGetValue(group.Key, out var set))
                         entriesToRemove[group.Key] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -112,7 +118,9 @@ public static class AdditionUninstaller
 
             linesRemoved += RemoveDataLines(gameRoot, mod, skipped);
             freedIds.AddRange(mod.ObjectIds);
-            removedMods.Add(mod.Name);
+
+            if (stillInTheGame.Count == 0) removedMods.Add(mod.Name);
+            else retained[mod] = stillInTheGame;
         }
 
         // A mod that added only collision still needs its archive rebuilt, so the set of archives to
@@ -149,7 +157,37 @@ public static class AdditionUninstaller
                 gameRoot, archiveRelativePath, names, collisionToRemove, skipped, progress, speed);
         }
 
-        foreach (var mod in mods) manifest.Mods.Remove(mod);
+        // A mod only leaves the record once nothing of it is left in the game.
+        //
+        // This used to be an unconditional Remove, and that was a quiet, permanent bug. An entry
+        // whose bytes had changed since install is deliberately LEFT IN PLACE - deleting it would
+        // destroy work SAFT never did - and the mod was struck from the record anyway. The asset then
+        // sat in the archive with nothing describing it: invisible to every future uninstall, because
+        // every future uninstall reads this file. The summary said the mod had been removed, and the
+        // only way to find out otherwise was to open the archive and look.
+        //
+        // Now what could not be removed stays written down. The record keeps exactly the entries
+        // still in the game and drops everything that did come out - the map lines, the collision,
+        // the object ids - so running uninstall again retries only what is left rather than trying to
+        // remove the same lines twice.
+        foreach (var mod in mods)
+        {
+            if (!retained.TryGetValue(mod, out var survivors))
+            {
+                manifest.Mods.Remove(mod);
+                continue;
+            }
+
+            mod.ArchiveEntries.Clear();
+            mod.ArchiveEntries.AddRange(survivors);
+            mod.DataLines.Clear();
+            mod.Collisions.Clear();
+            mod.ObjectIds.Clear();
+
+            onStep?.Invoke(
+                $"removal: '{mod.Name}' is still recorded - {survivors.Count} asset(s) could not be " +
+                "removed and are still in your game");
+        }
 
         // The gta.dat registration is shared by every addition, so it only comes out once nothing is
         // left that depends on it — removing it early would stop other mods' objects loading.
@@ -172,9 +210,19 @@ public static class AdditionUninstaller
     /// to answer the question and a 940 MB file should be opened once for seven answers, not seven
     /// times for one each.
     /// </summary>
+    /// <param name="stillInTheGame">
+    /// Entries this refuses to remove which are, as far as it can tell, STILL THERE. The caller keeps
+    /// these in the record so a later uninstall can try again — see the note where the record is
+    /// rewritten. An entry that has simply gone is not added here: there is nothing left to describe.
+    ///
+    /// When the archive cannot be read at all, every entry in it lands here. That errs towards
+    /// keeping a record for something already gone, which costs a confusing line in the uninstall
+    /// summary; the other direction costs the only description of assets sitting in someone's game,
+    /// which cannot be recovered.
+    /// </param>
     private static List<string> VerifyArchiveEntries(
         string gameRoot, string archiveRelativePath, IReadOnlyList<AddedArchiveEntry> entries,
-        List<string> skipped)
+        List<string> skipped, List<AddedArchiveEntry> stillInTheGame)
     {
         var verified = new List<string>();
         var archivePath = Path.Combine(gameRoot, archiveRelativePath);
@@ -182,7 +230,11 @@ public static class AdditionUninstaller
         if (!File.Exists(archivePath))
         {
             foreach (var entry in entries)
+            {
                 skipped.Add($"{entry.EntryName}: the archive it was added to no longer exists");
+                stillInTheGame.Add(entry);
+            }
+
             return verified;
         }
 
@@ -208,6 +260,7 @@ public static class AdditionUninstaller
                 if (AdditionsManifest.ComputeSha256(ReadEntry(archive, found)) != entry.Sha256)
                 {
                     skipped.Add($"{entry.EntryName}: it has been changed since SAFT added it, so it was left in place");
+                    stillInTheGame.Add(entry);
                     continue;
                 }
 
@@ -218,7 +271,14 @@ public static class AdditionUninstaller
         {
             // One failure to read the archive answers for every entry in it - the same message each
             // entry would have reported on its own.
-            foreach (var entry in entries) skipped.Add($"{entry.EntryName}: {ex.Message}");
+            // They stay on the record, because an archive that could not be opened has told us
+            // nothing about what is inside it.
+            foreach (var entry in entries)
+            {
+                skipped.Add($"{entry.EntryName}: {ex.Message}");
+                stillInTheGame.Add(entry);
+            }
+
             return new List<string>();
         }
 

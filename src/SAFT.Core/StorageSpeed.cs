@@ -40,8 +40,21 @@ public sealed class StorageSpeed
     /// The smallest stretch worth judging. Short samples are noise — a single stalled flush, a
     /// scheduler hiccup — and calling those a degraded card would make the warning worthless.
     /// </summary>
-    private static readonly TimeSpan MinimumWindow = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MinimumWindow = TimeSpan.FromSeconds(10);
     private const long MinimumWindowBytes = 4L * 1024 * 1024;
+
+    /// <summary>
+    /// How much has to be written before throughput means anything at all.
+    ///
+    /// The first version judged any write, and cried wolf on the very first install: it reported
+    /// 0.5 MB/s after two mods, on a card that was perfectly healthy. The number was real and the
+    /// conclusion was nonsense, because a small archive full of small entries is not bandwidth-bound
+    /// at all - the time goes on opening and reading thousands of individual files, not on the card
+    /// accepting bytes. Dividing bytes by seconds there measures the wrong thing.
+    ///
+    /// Only a large, sustained write says anything about the card, so nothing under this is judged.
+    /// </summary>
+    private const long MinimumBytesToJudge = 200L * 1024 * 1024;
 
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private long _lastBytes;
@@ -55,9 +68,15 @@ public sealed class StorageSpeed
     /// Feeds in the running total of bytes written so far. Safe to call as often as the write loop
     /// likes; windows shorter than <see cref="MinimumWindow"/> are accumulated rather than judged.
     /// </summary>
-    public void Sample(long totalBytesWritten)
+    public void Sample(long totalBytesWritten) => SampleAt(totalBytesWritten, _clock.Elapsed);
+
+    /// <summary>
+    /// The same, at a stated moment. Only the tests use it, so that proving a ninety-second collapse
+    /// does not cost ninety seconds of waiting - the thresholds here are measured in tens of seconds,
+    /// and a test suite that sleeps through them is a test suite nobody runs.
+    /// </summary>
+    internal void SampleAt(long totalBytesWritten, TimeSpan now)
     {
-        var now = _clock.Elapsed;
         var bytes = totalBytesWritten - _lastBytes;
         var span = now - _lastAt;
 
@@ -73,7 +92,10 @@ public sealed class StorageSpeed
     }
 
     /// <summary>Whether any measured stretch of this write ran below the degraded line.</summary>
-    public bool IsDegraded => _worstBytesPerSecond != long.MaxValue && _worstBytesPerSecond < DegradedBytesPerSecond;
+    public bool IsDegraded =>
+        _totalBytes >= MinimumBytesToJudge &&
+        _worstBytesPerSecond != long.MaxValue &&
+        _worstBytesPerSecond < DegradedBytesPerSecond;
 
     /// <summary>Average across every judged window, or 0 if nothing ran long enough to judge.</summary>
     public long AverageBytesPerSecond =>
@@ -95,18 +117,12 @@ public sealed class StorageSpeed
     public string? Warning() =>
         !IsDegraded
             ? null
-            : $"Your SD card slowed down to {Mb(SlowestBytesPerSecond)} MB/s while this was being written. " +
-              "A healthy one manages 25 MB/s or more here.\n\n" +
-              "This is the card, not SAFT, and nothing has gone wrong - everything installed correctly, it " +
-              "just took longer than it should have.\n\n" +
-              "Why it happens: an SD card takes writes quickly into a small fast buffer, and once that buffer " +
-              "is full it has to erase space before it can write again, which is many times slower. Installing " +
-              "one mod can write a gigabyte or more, so two or three installs in a row will fill that buffer on " +
-              "most cards. It also affects everything else using the card, not just SAFT.\n\n" +
-              "What to do: leave the card alone for five to ten minutes and it will clear itself - the card " +
-              "keeps tidying up in the background even when nothing is running. Give it longer after " +
-              "extracting a game, because twenty thousand small files take far longer to settle than one big " +
-              "one. A faster or emptier card recovers sooner.";
+            : $"Your SD card slowed to {Mb(SlowestBytesPerSecond)} MB/s while this was being written. " +
+              "A healthy one manages 25 MB/s or more.\n\n" +
+              "This is the card, not SAFT - everything installed correctly, it just took longer than " +
+              "it should have.\n\n" +
+              "Leave the card alone for five to ten minutes and it will clear itself. The README " +
+              "explains why this happens.";
 
     private static string Mb(long bytesPerSecond) => (bytesPerSecond / (1024.0 * 1024.0)).ToString("0.0");
 }

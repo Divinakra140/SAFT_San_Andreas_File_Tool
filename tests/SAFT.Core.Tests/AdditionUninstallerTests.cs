@@ -157,6 +157,41 @@ public class AdditionUninstallerTests
         Assert.Contains(archive.Entries, e => e.Name == "saftcastle.dff");
     }
 
+    /// <summary>
+    /// The other half of the test above, and the one that was missing.
+    ///
+    /// Refusing to delete a changed asset is right. Striking the mod off the record anyway is not:
+    /// the asset is still in the archive, and the record is the only thing that knows it is SAFT's.
+    /// Remove that and it can never be found again by any version of SAFT, on any platform - the
+    /// uninstall reports success and the leftovers are permanent. That is exactly what a real game
+    /// was found in: seven orphaned entries and a record reading "Mods": [].
+    /// </summary>
+    [Fact]
+    public void Keeps_a_mod_on_the_record_when_it_could_not_take_all_of_it_out()
+    {
+        var game = BuildGame();
+        var manifest = InstallAndRecord(game, ("My Castle", "saftcastle"));
+
+        var replacement = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(replacement, "saftcastle.dff"), "A COMPLETELY DIFFERENT MODEL");
+        DirectModInstaller.Apply(DirectModInstaller.Plan(game, replacement), backupOutputFolder: null);
+
+        var result = AdditionUninstaller.Remove(game, manifest, new[] { "My Castle" });
+
+        // Still on the record, because it is still in the game.
+        var record = Assert.Single(manifest.Mods);
+        Assert.Equal("My Castle", record.Name);
+        Assert.Contains(record.ArchiveEntries, e => e.EntryName == "saftcastle.dff");
+
+        // And NOT reported as removed, because it was not.
+        Assert.DoesNotContain("My Castle", result.RemovedMods);
+
+        // What did come out is struck off, so running uninstall again does not try to remove the
+        // same map lines a second time.
+        Assert.Empty(record.DataLines);
+        Assert.Empty(record.ObjectIds);
+    }
+
     [Fact]
     public void Reports_rather_than_fails_when_a_line_was_already_removed_by_hand()
     {

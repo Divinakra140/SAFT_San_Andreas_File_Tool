@@ -132,6 +132,59 @@ internal static class ActivityLog
         }
     }
 
+    /// <summary>
+    /// A once-per-operation census of what the process is actually holding.
+    ///
+    /// Every breadcrumb carries the live heap, but that number cannot answer the question that
+    /// matters: is memory ACCUMULATING, or has the collector simply not bothered yet? Across six
+    /// identical operations the live heap climbed 10 -> 32 MB, which is either a real leak or normal
+    /// laziness, and those need opposite fixes. Collecting first and reporting the survivors settles
+    /// it - if that number climbs, something is genuinely being held.
+    ///
+    /// MemoryLoadBytes is the other half: what the RUNTIME believes the whole machine is using. SAFT
+    /// dies without ever throwing, which is what being killed from outside looks like, so knowing
+    /// whether the system was under pressure at the time is worth more than any managed number.
+    ///
+    /// Once per install, not per step. The lesson from the diagnostic that made things WORSE is that
+    /// a measurement taken thousands of times is a change to the thing being measured; taken once, a
+    /// forced collection costs a few milliseconds at a point where the user is reading a summary.
+    /// </summary>
+    public static void Census(string when)
+    {
+        try
+        {
+            // NO FORCED COLLECTION. The first version of this called
+            // GC.GetTotalMemory(forceFullCollection: true), which runs a full blocking collection -
+            // on the UI THREAD, since that is where the summary is built. On a real device that
+            // froze the whole container: the log's last line was the one written immediately before
+            // this call, and Android put up "Winlator is not responding".
+            //
+            // Which is the second time a diagnostic in this app has destabilised the thing it was
+            // measuring. The numbers below are all cheap reads of state the runtime already keeps.
+            // Anything that makes the process DO something to be measured does not belong here.
+            var live = GC.GetTotalMemory(false) / 1048576;
+            var info = GC.GetGCMemoryInfo();
+
+            // COMMITTED and FRAGMENTED are the numbers that matter, and neither of them is the heap.
+            // SAFT is a 32-bit process: it has about 4 GB of ADDRESS SPACE, and the live-object
+            // figure everything else reports says nothing about how much of that has been reserved
+            // and never handed back. A process can hold 30 MB of objects while sitting on hundreds
+            // of megabytes of committed, fragmented space - and each operation here reads the whole
+            // game map, which allocates around 85 MB and drops it again. If committed climbs across
+            // operations while the heap does not, that is the accumulation, and it explains a death
+            // with no managed exception: it is not the CLR failing to allocate, it is the address
+            // space running out underneath it.
+            Note($"census ({when}): live {live:N0} MB; " +
+                 $"committed {info.TotalCommittedBytes / 1048576:N0} MB, fragmented {info.FragmentedBytes / 1048576:N0} MB; " +
+                 $"gen0/1/2 {GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)}; " +
+                 $"system using {info.MemoryLoadBytes / 1048576:N0} MB of {info.TotalAvailableMemoryBytes / 1048576:N0} MB");
+        }
+        catch (Exception ex)
+        {
+            Note($"census ({when}): unavailable - {ex.GetType().Name}");
+        }
+    }
+
     /// <summary>Whatever the last session managed to write, without loading a large file.</summary>
     private static string ReadTail(string path)
     {

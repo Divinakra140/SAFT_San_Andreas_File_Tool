@@ -34,16 +34,11 @@ public sealed class SaftManifest
     /// <summary>Same idea as <see cref="UnpackedAudioPackages"/>, for streamed-audio stations (e.g. "AA") unpacked into Track_NNN.ogg files.</summary>
     public List<string> UnpackedStreamStations { get; init; } = new();
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     public void Save(string destinationDirectory)
     {
         var path = Path.Combine(destinationDirectory, FileName);
-        File.WriteAllText(path, JsonSerializer.Serialize(this, JsonOptions));
+        // Source-generated, not reflected over - see SaftJsonContext.
+        File.WriteAllText(path, JsonSerializer.Serialize(this, SaftJsonContext.Default.SaftManifest));
     }
 
     public static SaftManifest Load(string extractionDirectory)
@@ -54,7 +49,7 @@ public sealed class SaftManifest
                 $"No {FileName} found in '{extractionDirectory}'. Pick the folder you originally extracted to.", path);
 
         var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<SaftManifest>(json)
+        return JsonSerializer.Deserialize(json, SaftJsonContext.Default.SaftManifest)
             ?? throw new InvalidDataException($"'{path}' could not be parsed.");
     }
 }

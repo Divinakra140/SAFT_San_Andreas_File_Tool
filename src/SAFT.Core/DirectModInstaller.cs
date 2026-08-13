@@ -651,7 +651,7 @@ public static class DirectModInstaller
                 // to check them was a multi-megabyte allocation for a four-byte question.
                 if (!LooksLikeOggFile(match.ModFilePath))
                     throw new InvalidDataException($"'{match.ModFilePath}' doesn't look like a valid Ogg file (missing 'OggS' header).");
-                PatchStreamTrack(match);
+                PatchStreamTrack(match, onStep);
 
                 streamSummaries.Add(new DirectStreamSummary(match.MatchKey, backedUp));
             }
@@ -784,8 +784,9 @@ public static class DirectModInstaller
         }
     }
 
-    private static void PatchStreamTrack(DirectStreamMatch match) =>
-        StreamIndex.PatchTrack(match.StationAbsolutePath, match.HeaderOffset, match.OriginalPayloadLength, match.ModFilePath);
+    private static void PatchStreamTrack(DirectStreamMatch match, Action<string>? onStep) =>
+        StreamIndex.PatchTrack(
+            match.StationAbsolutePath, match.HeaderOffset, match.OriginalPayloadLength, match.ModFilePath, onStep);
 
     private static void BackupOriginals(
         string archiveAbsolutePath, string archiveRelativePath, IReadOnlyList<DirectInstallMatch> matches,

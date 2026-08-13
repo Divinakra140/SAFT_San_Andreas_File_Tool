@@ -510,23 +510,45 @@ public partial class MainForm : Form
     /// the stretch of the install three crashes have now happened in, and the least it can do is not
     /// ask twice.
     /// </param>
-    private static AddedMod? FindInstalledMod(string backupFolder, string modName, out AdditionsManifest? manifest)
+    /// <summary>
+    /// Returns the installed copy of this mod if there is one, and the record it came from.
+    ///
+    /// A tuple rather than an out parameter so this can be called on a background thread - it reads a
+    /// file, and reading files on the UI thread is what leaves Winlator unable to answer Android for
+    /// long enough to be declared unresponsive.
+    /// </summary>
+    private static (AddedMod? Installed, AdditionsManifest? Record) FindInstalledMod(string backupFolder, string modName)
     {
-        manifest = null;
-        if (string.IsNullOrWhiteSpace(backupFolder)) return null;
+        if (string.IsNullOrWhiteSpace(backupFolder)) return (null, null);
 
         try
         {
-            manifest = AdditionsManifest.Load(backupFolder);
-            return manifest?.Mods.FirstOrDefault(m => m.Name.Equals(modName, StringComparison.OrdinalIgnoreCase));
+            var manifest = AdditionsManifest.Load(backupFolder);
+            return (manifest?.Mods.FirstOrDefault(m => m.Name.Equals(modName, StringComparison.OrdinalIgnoreCase)), manifest);
         }
         catch
         {
             // An unreadable manifest just means we can't tell, and installing normally is no worse
             // than today's behaviour.
-            manifest = null;
-            return null;
+            return (null, null);
         }
+    }
+
+    /// <summary>
+    /// Says, in its own window, when the drive underneath was crawling.
+    ///
+    /// Its own window rather than tacked onto the install summary, because that summary is a plain
+    /// MessageBox: it is sized by Windows, not by SAFT, and Winlator's 960x544 screen is short enough
+    /// that adding paragraphs to it pushed its own OK button off the bottom of the display where it
+    /// could not be pressed. Everything SAFT writes itself goes through ConfirmDialog, which measures
+    /// against the real screen and scrolls rather than overflowing.
+    /// </summary>
+    private void ReportSlowStorage(StorageSpeed speed)
+    {
+        if (speed.Warning() is not { } warning) return;
+
+        using var note = ConfirmDialog.Note(warning, "OK");
+        note.ShowDialog(this);
     }
 
     /// <summary>
@@ -1175,9 +1197,11 @@ public partial class MainForm : Form
             AdditionPlan? additions = null;
             StreamingVerdict verdict;
 
-            // Hoisted out of the block below so the reinstall path can reuse it instead of asking the
-            // game the same question twice. See where it is used again.
+            // Hoisted out of the block below so the reinstall path can reuse them instead of asking
+            // the game the same questions twice. See where they are used again.
             HashSet<string>? existingNames = null;
+            GameDensityBaseline? gameBaseline = null;
+            IReadOnlySet<int>? gameUsedIds = null;
 
             if (!affectsStreaming)
             {
@@ -1207,6 +1231,8 @@ public partial class MainForm : Form
                 // failure in the scan - and this exact gap is where two runs have now died.
                 ActivityLog.Note("install: collecting the object ids already in use");
                 var usedIds = await Task.Run(() => ObjectIdAllocator.UsedIdsFrom(gameMap.Definitions));
+                gameUsedIds = usedIds;
+                gameBaseline = gameMap.Baseline;
 
                 ActivityLog.Note($"install: {usedIds.Count:N0} object id(s) in use; scanning the mod folder for additions");
                 additions = await Task.Run(() => AdditionScanner.Scan(
@@ -1293,10 +1319,15 @@ public partial class MainForm : Form
             // what the previous five unlogged gaps looked like too.
             var modName = Path.GetFileName(modFolder.TrimEnd(Path.DirectorySeparatorChar));
             ActivityLog.Note($"install: checking whether '{modName}' is already installed");
-            AdditionsManifest? installedRecord = null;
-            var alreadyInstalled = installAdditions
-                ? FindInstalledMod(DirectBackupDestBox.Text, modName, out installedRecord)
-                : null;
+            // Read on a background thread: this is a file read, and it sat on the UI thread until two
+            // separate crashes landed on this exact line.
+            var backupFolderForLookup = DirectBackupDestBox.Text;
+            var found = installAdditions
+                ? await Task.Run(() => FindInstalledMod(backupFolderForLookup, modName))
+                : (Installed: null, Record: (AdditionsManifest?)null);
+
+            var alreadyInstalled = found.Installed;
+            var installedRecord = found.Record;
             ActivityLog.Note(alreadyInstalled is null
                 ? "install: not already installed"
                 : $"install: already installed - {alreadyInstalled.ObjectIds.Count} object(s); asking about reinstalling");
@@ -1442,7 +1473,7 @@ public partial class MainForm : Form
                     // Reusing the record read a moment ago when the reinstall was confirmed, rather
                     // than reading the same file off the card again. Nothing between the two touches
                     // it: the direct pass writes archives, audio and loose game files, never this.
-                    var priorManifest = installedRecord ?? AdditionsManifest.Load(backupFolder);
+                    var priorManifest = installedRecord ?? await Task.Run(() => AdditionsManifest.Load(backupFolder));
                     ActivityLog.Note(priorManifest is null
                         ? "reinstall: no record found, nothing to remove"
                         : $"reinstall: record has {priorManifest.Mods.Count} mod(s) in it" +
@@ -1500,9 +1531,20 @@ public partial class MainForm : Form
                     // This is the exact call SAFT hung inside: same files, same folder, a different
                     // answer to "is this already in the game" — and the files were never the part
                     // that had to be re-read.
+                    // The baseline and the used object ids come from the checks too, for the same
+                    // reason the name list does: they were worked out minutes ago and nothing since
+                    // has changed them. Recomputing them read every .ide in the game for the ids and
+                    // then the WHOLE MAP again for the baseline - measured at 6 and 27 seconds on a
+                    // real device, 33 seconds of a reinstall spent answering questions it had already
+                    // answered. That is what "Rechecking what this mod adds" was doing all that time.
+                    //
+                    // The ids are a moment stale - the copy being removed frees four of them - which
+                    // makes the free-slot figure four lower than the truth. Erring low is the safe
+                    // direction for a number whose only job is to warn when slots are running out.
                     additions = await Task.Run(() => AdditionScanner.Scan(
                         gameFolder, modFolder, names.Contains,
-                        baseline: null, usedObjectIds: null, onStep: ActivityLog.Note, modFiles: modListing));
+                        baseline: gameBaseline, usedObjectIds: gameUsedIds,
+                        onStep: ActivityLog.Note, modFiles: modListing));
 
                     // A name can be on both lists: coming out with the old copy, and going back in
                     // from the mod folder. Exactly one route must put it back, or the archive ends up
@@ -1539,18 +1581,31 @@ public partial class MainForm : Form
                 // off disk, drops the old copy's entry by name, and puts the new one in its place.
                 if (backupFolder is not null)
                 {
-                    var manifest = AdditionsManifest.Load(backupFolder) ?? new AdditionsManifest { GameRootPath = gameFolder };
+                    // OFF THE UI THREAD, like every other file operation in this app. This one was
+                    // not, and two runs in a row died in the gap it left in the log - along with
+                    // three earlier crashes, every one of them at a manifest read or write with
+                    // nothing else in between. Android decides an app is unresponsive when its main
+                    // thread stops answering, and under Winlator SAFT's UI thread is what keeps that
+                    // loop turning: blocking it on a file read is how "Winlator is not responsive"
+                    // happens. The work is identical; only the thread it runs on has changed.
+                    ActivityLog.Note("install: writing down what was added");
+                    await Task.Run(() =>
+                    {
+                        var manifest = AdditionsManifest.Load(backupFolder) ?? new AdditionsManifest { GameRootPath = gameFolder };
 
-                    // Belt and braces: if a record under this name somehow survived, replace it
-                    // rather than sitting alongside it.
-                    manifest.Mods.RemoveAll(m => m.Name.Equals(modName, StringComparison.OrdinalIgnoreCase));
-                    manifest.Mods.Add(added.Recorded);
-                    manifest.Save(backupFolder);
+                        // Belt and braces: if a record under this name somehow survived, replace it
+                        // rather than sitting alongside it.
+                        manifest.Mods.RemoveAll(m => m.Name.Equals(modName, StringComparison.OrdinalIgnoreCase));
+                        manifest.Mods.Add(added.Recorded);
+                        manifest.Save(backupFolder);
+                    });
+                    ActivityLog.Note("install: record written");
                 }
             }
 
             DirectSubProgressText.Text = "Done.";
             ActivityLog.Note($"install: {speed.Describe()}");
+            ActivityLog.Census("after installing");
 
             var filesReplaced = result.Archives.Sum(s => s.FilesReplaced);
             var tooLargeCount = plan.AudioMatchesTooLarge.Count + plan.StreamMatchesTooLarge.Count;
@@ -1606,10 +1661,6 @@ public partial class MainForm : Form
             if (failedCount > 0) summaryLines.Add($"{failedCount} audio file(s) failed to read and were skipped.");
             if (unmatchedFileCount > 0) summaryLines.Add($"{unmatchedFileCount} file(s) didn't match anything in your game and were left unplaced.");
 
-            // Added to the summary that already appears rather than shown as its own popup. This is
-            // news, not a question, and every extra dialog is another window built through Wine - one
-            // of which SAFT has already died inside. Nothing is worth a new one here.
-            if (speed.Warning() is { } slow) summaryLines.Add("\n" + slow);
             // Only claim backups were made if something was actually replaced. An addition has no
             // original to back up, so saying "originals were backed up" after a pure addition sends
             // the user looking for files that were never supposed to exist.
@@ -1633,7 +1684,16 @@ public partial class MainForm : Form
                     $"what was added is {AdditionsManifest.FileName}, in {backupFolder}. The Uninstall tab " +
                     "needs that file to remove them again, so keep it there.");
 
-            MessageBox.Show(string.Join("\n", summaryLines), "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            // SAFT's own dialog, not a MessageBox. Two reasons, one already proven on a real screen:
+            // a MessageBox is sized by Windows, and this summary grows a line per problem, so at
+            // 960x544 it has already pushed its own OK button off the bottom of the display where it
+            // could not be pressed. The second is that a MessageBox is a native window built by Wine,
+            // and this app's history is a long list of native window work behaving differently there.
+            // ConfirmDialog measures against the real screen, scrolls rather than overflowing, logs
+            // itself, and is disposed.
+            using (var summary = ConfirmDialog.Note(string.Join("\n", summaryLines), "OK"))
+                summary.ShowDialog(this);
+            ReportSlowStorage(speed);
 
             HoldBeforeLaunching();
         }
@@ -1830,7 +1890,9 @@ public partial class MainForm : Form
                 ActivityLog.Note($"uninstall: removal finished - {removed.ArchiveEntriesRemoved} asset(s), {removed.DataLinesRemoved} map line(s), {removed.FreedObjectIds.Count} slot(s) freed");
 
                 // The record is rewritten so a later uninstall doesn't try to remove all this again.
-                additionsManifest.Save(backupFolder);
+                ActivityLog.Note("uninstall: writing down what is left");
+                await Task.Run(() => additionsManifest.Save(backupFolder));
+                ActivityLog.Note("uninstall: record written");
             }
 
             UninstallSubProgressText.Text = "Done.";
@@ -1876,9 +1938,18 @@ public partial class MainForm : Form
             if (unmatchedCount > 0) summaryLines.Add($"{unmatchedCount} file(s) in the backup folder didn't match anything in your game.");
             if (makeModBackup) summaryLines.Add($"Your previously installed mod files were backed up to: {modBackupFolder}");
             ActivityLog.Note($"uninstall: {speed.Describe()}");
-            if (speed.Warning() is { } slowRestore) summaryLines.Add("\n" + slowRestore);
+            ActivityLog.Census("after uninstalling");
 
-            MessageBox.Show(string.Join("\n", summaryLines), "SAFT", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            // SAFT's own dialog, not a MessageBox. Two reasons, one already proven on a real screen:
+            // a MessageBox is sized by Windows, and this summary grows a line per problem, so at
+            // 960x544 it has already pushed its own OK button off the bottom of the display where it
+            // could not be pressed. The second is that a MessageBox is a native window built by Wine,
+            // and this app's history is a long list of native window work behaving differently there.
+            // ConfirmDialog measures against the real screen, scrolls rather than overflowing, logs
+            // itself, and is disposed.
+            using (var summary = ConfirmDialog.Note(string.Join("\n", summaryLines), "OK"))
+                summary.ShowDialog(this);
+            ReportSlowStorage(speed);
         }
         catch (Exception ex)
         {
