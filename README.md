@@ -10,8 +10,8 @@
 - SAFT.apk, the Android port of SAFT.exe, is much faster and more stable than using SAFT.exe in winlator. 
 - SAFT contains no Game assets, and only allows for users to modify their own GTA SA Game with their own mods.
 - SAFT is a file extractor, identifier, replacer and **adder**; it knows where every modified file goes, based on name.
-- SAFT ships as **two exes**. **SAFT.exe** has two tabs — *Install Mods* and *Uninstall Mods* — and
-  everything in it finishes in seconds, which makes it the one to use under Android emulation.
+- SAFT ships as **two exes** and one **.APK**. **SAFT.exe** has two tabs — *Install Mods* and *Uninstall Mods* — and
+  is the one that got ported to Android, which also has those two tabs plus a way to verify game contents.
   **SAFT-Dev.exe** adds *Extract Game Files*, *Install Mod(s) into Extracted* and *Rebuild from
   Extracted* for mod developers; those three write over 20,000 separate files and are a Windows job.
 
