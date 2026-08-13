@@ -7,6 +7,7 @@
 - SAFT also runs well in certain PC emulators on Android — to be clear, that means SAFT modifies the 
   original PC game and SAFT can launch and function inside an emulated Windows container on Android. 
   SAFT cannot modify the Android port of GTA SA, only PC. 
+- SAFT.apk, the Android port of SAFT.exe, is much faster and more stable than using SAFT.exe in winlator. 
 - SAFT contains no Game assets, and only allows for users to modify their own GTA SA Game with their own mods.
 - SAFT is a file extractor, identifier, replacer and **adder**; it knows where every modified file goes, based on name.
 - SAFT ships as **two exes**. **SAFT.exe** has two tabs — *Install Mods* and *Uninstall Mods* — and
