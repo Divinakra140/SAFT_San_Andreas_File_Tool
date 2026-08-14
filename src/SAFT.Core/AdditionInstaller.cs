@@ -130,6 +130,34 @@ public static class AdditionInstaller
         var drops = entriesToDrop ?? (IReadOnlySet<string>)new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var prunes = collisionRecordsToPrune
                      ?? new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        // An asset the mod defines can already be in the archive, left there by an earlier round of
+        // the same mod that did not come all the way out. It is still the mod's file - that is what
+        // lets a game in that state heal on the next install rather than staying stuck - but a
+        // SECOND entry under a name the directory table already carries is a corrupt archive, not a
+        // tidy-up: the game reads whichever it finds first, and the uninstall removes one and leaves
+        // the other. The old copy is dropped in the same pass that writes the new one.
+        var alreadyPresent = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var current = ImgArchive.Open(archivePath);
+            foreach (var entry in current.Entries) alreadyPresent.Add(entry.Name);
+        }
+        catch (Exception ex)
+        {
+            // Unreadable here means the write below fails with a better message than anything this
+            // could say. Nothing has been touched yet.
+            onStep?.Invoke($"additions: could not read the archive's current entries ({ex.GetType().Name})");
+        }
+
+        var supersede = assets.Where(a => alreadyPresent.Contains(a.FileName)).Select(a => a.FileName).ToList();
+        if (supersede.Count > 0)
+        {
+            onStep?.Invoke($"additions: replacing {supersede.Count} leftover copy/copies of this mod's own asset(s)");
+            var widened = new HashSet<string>(drops, StringComparer.OrdinalIgnoreCase);
+            foreach (var name in supersede) widened.Add(name);
+            drops = widened;
+        }
         if (assets.Count == 0 && plan.Collision.Count == 0 && replacements.Count == 0
             && drops.Count == 0 && prunes.Count == 0) return notes;
 

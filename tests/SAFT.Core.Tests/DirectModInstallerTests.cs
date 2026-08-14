@@ -28,6 +28,76 @@ public class DirectModInstallerTests
     }
 
     /// <summary>
+    /// An asset SAFT added is never "backed up", because there is no original of it to back up.
+    ///
+    /// Reinstalling a mod is what exposes this: the second install finds the first install's assets
+    /// already in the archive, correctly calls them replacements, and would file a copy of the MOD
+    /// in the backup folder as though it were stock. A restore later reads that folder and believes
+    /// it is looking at vanilla files.
+    ///
+    /// It also started a chain that killed an uninstall outright — the restore plans those names,
+    /// the addition removal deletes them first, and the restore then indexes an entry that is gone.
+    ///
+    /// Distinct from the 1.6 bug of overwriting a good vanilla backup with a modded file: NeedsBackup
+    /// has guarded that for a long time, and this is the case where no vanilla file exists at all.
+    /// </summary>
+    [Fact]
+    public void Does_not_back_up_an_asset_that_SAFT_added()
+    {
+        var gameRoot = BuildGameRoot();
+        var backupFolder = TestScratch.NewDir();
+
+        // The record says saftball.dff is SAFT's own addition, sitting where the backups live.
+        new AdditionsManifest
+        {
+            GameRootPath = gameRoot,
+            Mods =
+            {
+                new AddedMod
+                {
+                    Name = "My Mod",
+                    AddedAtUtc = DateTimeOffset.UtcNow,
+                    ArchiveEntries =
+                    {
+                        new AddedArchiveEntry
+                        {
+                            ArchiveRelativePath = Path.Combine("models", "gta3.img"),
+                            EntryName = "saftball.dff",
+                            Sha256 = "irrelevant",
+                        },
+                    },
+                },
+            },
+        }.Save(backupFolder);
+
+        // Put it in the archive, as install #1 would have.
+        var archivePath = Path.Combine(gameRoot, "models", "gta3.img");
+        using (var archive = ImgArchive.Open(archivePath))
+        {
+            var files = archive.Entries
+                .Select(e => (e.Name, (Func<Stream>)(() => archive.OpenEntry(e))))
+                .ToList();
+            files.Add(("saftball.dff", () => new MemoryStream(Encoding.ASCII.GetBytes("added by saft"))));
+            ImgArchive.Write(archivePath + ".tmp", files);
+        }
+
+        File.Delete(archivePath);
+        File.Move(archivePath + ".tmp", archivePath);
+        ImgArchive.ClearCaches();
+
+        // Install #2 replaces both a real game file and SAFT's own added asset.
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "banshee.dff"), "new car");
+        File.WriteAllText(Path.Combine(modSource, "saftball.dff"), "newer ball");
+
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, modSource), backupFolder);
+
+        // The real original was kept; SAFT's own asset was not filed as though it were stock.
+        Assert.True(File.Exists(Path.Combine(backupFolder, "models", "gta3.img", "dff", "banshee.dff")));
+        Assert.False(File.Exists(Path.Combine(backupFolder, "models", "gta3.img", "dff", "saftball.dff")));
+    }
+
+    /// <summary>
     /// A plan can name an entry that is no longer in the archive by the time it is applied, and that
     /// must not be fatal.
     ///
@@ -870,5 +940,81 @@ public class DirectModInstallerTests
         using var entry = scriptImg.OpenEntry(scriptImg.Entries.Single());
         using var reader = new StreamReader(entry);
         Assert.StartsWith("original streamed script", reader.ReadToEnd());
+    }
+    /// <summary>
+    /// The uninstall reads originals out of the backup folder. If the "keep the files I am taking
+    /// out" box points at that same folder, the backup pass overwrites a vanilla original with the
+    /// modded file, and the restore then puts the mod back into the game believing it is stock. The
+    /// user's only good copy is gone and nothing in the log looks wrong.
+    ///
+    /// Found on a real uninstall, where the backup folder came out holding SAFT's own added assets
+    /// filed as vanilla originals. Refused before anything is written.
+    /// </summary>
+    [Fact]
+    public void Refuses_to_back_up_into_the_very_folder_it_is_restoring_from()
+    {
+        var gameRoot = BuildGameRoot();
+        var backupFolder = TestScratch.NewDir();
+
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, BuildMod("modded car model")), backupFolder);
+
+        var plan = DirectModInstaller.Plan(gameRoot, backupFolder);
+        var refused = Assert.Throws<InvalidOperationException>(
+            () => DirectModInstaller.Apply(plan, backupOutputFolder: backupFolder));
+
+        Assert.Contains("same as the folder being restored from", refused.Message);
+
+        // Refused up front, so the vanilla original is still the vanilla original.
+        Assert.Equal(
+            "original car model",
+            File.ReadAllText(Path.Combine(backupFolder, "models", "gta3.img", "dff", "banshee.dff")).TrimEnd('\0'));
+    }
+
+    /// <summary>A folder inside the one being restored from is the same trap one level down.</summary>
+    [Fact]
+    public void Refuses_to_back_up_into_a_folder_inside_the_one_it_is_restoring_from()
+    {
+        var gameRoot = BuildGameRoot();
+        var backupFolder = TestScratch.NewDir();
+
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, BuildMod("modded car model")), backupFolder);
+
+        var inside = Path.Combine(backupFolder, "taken-out");
+        Directory.CreateDirectory(inside);
+
+        Assert.Throws<InvalidOperationException>(
+            () => DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, backupFolder), backupOutputFolder: inside));
+    }
+
+    /// <summary>
+    /// A neighbour whose name merely starts the same way is not inside anything, and refusing it
+    /// would block a perfectly ordinary choice of folder.
+    /// </summary>
+    [Fact]
+    public void Allows_a_backup_folder_whose_name_only_starts_like_the_source()
+    {
+        var gameRoot = BuildGameRoot();
+        var backupFolder = Path.Combine(TestScratch.NewDir(), "Backups");
+        Directory.CreateDirectory(backupFolder);
+
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, BuildMod("modded car model")), backupFolder);
+
+        var neighbour = backupFolder + "2";
+        Directory.CreateDirectory(neighbour);
+
+        DirectModInstaller.Apply(DirectModInstaller.Plan(gameRoot, backupFolder), backupOutputFolder: neighbour);
+
+        // The restore ran, so the game holds the vanilla model again.
+        using var img = ImgArchive.Open(Path.Combine(gameRoot, "models", "gta3.img"));
+        using var entry = img.OpenEntry(img.Entries.First(e => e.Name == "banshee.dff"));
+        using var reader = new StreamReader(entry);
+        Assert.StartsWith("original car model", reader.ReadToEnd());
+    }
+
+    private static string BuildMod(string content)
+    {
+        var modSource = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(modSource, "banshee.dff"), content);
+        return modSource;
     }
 }

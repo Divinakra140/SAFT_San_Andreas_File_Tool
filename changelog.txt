@@ -506,3 +506,106 @@ that are not part of your game. saft-activity-log.txt, which lives next to SAFT.
 worth sending if anything goes wrong, stays exactly as it was.
 
 - Divinakra
+
+
+===================================================================================================
+CHANGELOG 2.1.3 - Knowing whose files are whose, and leaving nothing behind
+===================================================================================================
+
+Every version of SAFT so far decided whether a file in your modpack was REPLACING something or
+ADDING something by asking one question: does your game already have a file with that name? That
+question is asked of the game as it currently stands - which is to say, a game that already has mods
+in it. This release changes the question, and most of what follows comes from that.
+
+It also finishes the job on uninstalling. An uninstall now gives back the space it used and takes
+away the last of SAFT's own files, so a game you have installed and removed a mod from is the game
+you started with, byte for byte.
+
+Everything here is in all three builds - SAFT.exe, SAFT-Dev.exe and SAFT.apk. They share the same
+engine, and none of this is a Windows feature or an Android feature.
+
+
+Your backup folder now only ever holds your game's own files
+------------------------------------------------------------
+A modpack that ADDS an object has to declare that object in its own .ide file - that is what makes
+the game load it at all. So the modpack itself is the authority on which of its files are its own,
+and SAFT now asks the modpack instead of guessing from what is already in your game.
+
+That matters because an added object left in your archive - from a mod that did not come all the way
+out, or one you installed twice - looked exactly like one of your game's stock files to earlier
+versions. SAFT would take a "backup of the original", except the original it copied was the mod. From
+then on, every uninstall faithfully put that mod back into your game, because the backup folder said
+that was what stock looked like.
+
+Three things follow from asking the modpack instead:
+
+- Nothing a modpack adds is ever filed in your backup folder as though it were a vanilla file. Your
+  backup folder holds your game's files and nothing else.
+- A game that already has stray added assets in it repairs itself. The next install recognises them
+  as the mod's, adopts them, and the next uninstall takes them out - no record required, nothing for
+  you to clean up by hand.
+- An object you added yourself, by hand, stays yours. See below.
+
+
+An object you added by hand stays yours
+----------------------------------------
+If you added an object to your game last week - the model, its .ide line, its placement - and today
+you install a modpack carrying an updated version of that same object, SAFT now recognises that the
+object is already defined in YOUR map files, and treats the new model as a replacement of yours.
+
+Your model is backed up before it is swapped, so uninstalling puts it back. Your .ide line and your
+placement are left exactly as you wrote them, and no second copy of the object is added on a new
+object ID. SAFT does not edit map files it did not create, and it does not hand out a new ID for an
+object your game already has one for.
+
+
+Uninstalling gives the space back
+----------------------------------
+Editing an archive in place is what makes SAFT quick, and the price has always been dead space:
+removing an entry drops it from the directory but leaves its bytes in the file, and restoring a small
+original over a larger modded entry strands the difference. Neither was ever reclaimed, so a game
+that had a heavy mod installed and taken out again kept that space for good.
+
+Uninstalling now packs the archive out at the end, with a progress bar and a live count so you can
+see it working - it rewrites a whole archive, and on a tired SD card that can run for minutes.
+
+Measured on a real game: install a modpack, reinstall it three more times, then uninstall. The
+archive came back to 940,064,768 bytes, which is exactly what it was before any of it - with every
+restored file matching its backup byte for byte, including the sounds inside the audio banks, and not
+one stranded byte anywhere in the file.
+
+
+Nothing of SAFT's is left behind
+---------------------------------
+When the last added object comes out, SAFT now removes its own map folder - saft_additions.ide,
+saft_additions.ipl and the data/maps/saft folder holding them - instead of leaving three empty files
+it created sitting in your game. Its gta.dat lines came out already; now the files go too.
+
+It only does this once both files are genuinely empty, and it leaves the folder alone if you have put
+something of your own in it.
+
+
+Two guards on the folders you pick
+-----------------------------------
+The game folder and the backup folder are chosen separately, which leaves room for two mistakes worth
+catching before anything is written.
+
+SAFT will not back up the mod files it is removing into the same folder it is restoring your
+originals from. That would overwrite a vanilla file with the modded one and then restore the mod into
+your game believing it was stock - and your only good copy would be gone with nothing in the log
+looking wrong. It says so and stops, before a single byte is written.
+
+And if the backup folder you have chosen has a record that was written for a different game folder,
+SAFT tells you which one, and asks whether to carry on. Two copies of San Andreas is an ordinary
+thing to have, so this is a question and not a refusal - but pointing one game's backup folder at
+another game means an uninstall quietly does nothing, while the game your mod is actually in keeps
+it. Worth being asked.
+
+
+Uninstalling is faster
+-----------------------
+An uninstall on the Android build - removing seven added objects, restoring eleven original files
+across four archives, rewriting the map data, pruning the collision records and packing the archive -
+finished in 2.7 seconds, with the game landing byte-identical to stock.
+
+- Divinakra

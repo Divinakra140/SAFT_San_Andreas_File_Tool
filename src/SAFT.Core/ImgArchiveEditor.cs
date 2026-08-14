@@ -144,9 +144,25 @@ public static class ImgArchiveEditor
     /// Safe to be interrupted: the original is untouched until the replacement is complete, and the
     /// swap is a rename.
     /// </summary>
+    /// <param name="onProgress">
+    /// Entries written so far, and how many there are. This pass rewrites the whole archive, so on
+    /// tired storage it can run for minutes — measured at 3 to 4 on a card that had just taken an
+    /// install and a reinstall back to back. Without a count on screen that is indistinguishable
+    /// from a hang, and a user who closes SAFT during it is a user interrupting a rewrite of their
+    /// game. Every other long operation in SAFT reports; this one has to as well.
+    /// </param>
     /// <returns>Bytes reclaimed. Zero means there was nothing to reclaim and nothing was written.</returns>
-    public static long Compact(string archivePath, Action<string>? onStep = null, StorageSpeed? speed = null)
+    public static long Compact(
+        string archivePath, Action<string>? onStep = null, StorageSpeed? speed = null,
+        Action<int, int>? onProgress = null)
     {
+        // Defensive, not a fix for anything observed. Every in-place edit already drops the caches
+        // on its way out (TryRemove/TryReplace/TryAppend all end in Finish), so a stale directory
+        // table should not be reachable from here. Re-reading one directory costs almost nothing
+        // next to the whole-archive rewrite below, so this pays for itself the first time some
+        // future write path forgets.
+        ImgArchive.ClearCaches();
+
         long dead;
         try
         {
@@ -177,11 +193,14 @@ public static class ImgArchiveEditor
                 .Select(entry => (entry.Name, (Func<Stream>)(() => archive.OpenEntry(entry))))
                 .ToList();
 
-            ImgArchive.Write(tempPath, files, onBytesWritten: speed is null ? null : speed.Sample);
+            ImgArchive.Write(
+                tempPath, files,
+                onFileWritten: onProgress,
+                onBytesWritten: speed is null ? null : speed.Sample);
         }
 
-        ImgArchive.ClearCaches();
         FileReplace.MoveOver(tempPath, archivePath);
+        ImgArchive.ClearCaches();
 
         onStep?.Invoke($"archive: reclaimed {dead / 1048576.0:0.0} MB");
         return dead;

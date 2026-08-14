@@ -111,6 +111,11 @@ internal static class InstallRunner
         var gameListing = GameFiles.Walk(gameFolder, say);
         var modListing = GameFiles.Walk(modFolder, say);
 
+        // Before the analysis goes any further, let alone before anything is written: backing the
+        // originals up into the mod folder itself would file them alongside the mod's own files,
+        // where the next scan reads them back as things to install.
+        DirectModInstaller.EnsureBackupFolderIsSeparate(modFolder, backupFolder);
+
         say("\nworking out which files replace what");
         var plan = DirectModInstaller.Plan(gameFolder, modFolder, say, gameListing, modListing);
 
@@ -134,7 +139,8 @@ internal static class InstallRunner
             var usedIds = ObjectIdAllocator.UsedIdsFrom(gameMap.Definitions);
 
             additions = AdditionScanner.Scan(
-                gameFolder, modFolder, existingNames.Contains, gameMap.Baseline, usedIds, say, modListing);
+                gameFolder, modFolder, existingNames.Contains, gameMap.Baseline, usedIds, say, modListing,
+                gameDefinitions: gameMap.Definitions);
 
             say("measuring what this adds to what your game has to load");
             var impact = StreamingImpact.Measure(gameFolder, ReplacementSizes(plan), say, gameMap);
@@ -176,7 +182,8 @@ internal static class InstallRunner
     }
 
     /// <summary>Everything from here writes. Nothing above it does.</summary>
-    public static void Apply(InstallAnalysis a, Action<string> say)
+    /// <param name="warn">See the note on Jobs.Uninstall - the SD card warning goes on screen.</param>
+    public static void Apply(InstallAnalysis a, Action<string> say, Action<string, string>? warn = null)
     {
         if (a.Refused) throw new InvalidOperationException(a.Refusal);
 
@@ -189,6 +196,18 @@ internal static class InstallRunner
 
         // The archive additions are written into. Replacements bound for this same archive are folded
         // into that one rewrite rather than each rebuilding it themselves.
+        // Worked out BEFORE the fold, not just before the write.
+        //
+        // The mod's own additions are not replacements, and the fold below reads the replacement
+        // plan to decide what to carry into the additions rewrite. Filtering only at the Apply
+        // call left the fold reading the UNFILTERED plan, so an asset the mod defines was handed
+        // over as a replacement and installed as an addition both - and in the rewrite loop a
+        // replacement is checked before a removal, so the old copy was kept and the new one
+        // appended beside it. Seven leftovers came out as fourteen entries under seven names.
+        var toApply = a.Additions is null ? a.Plan : a.Plan.Without(a.Additions.AssetFileNames);
+        if (toApply.Matches.Count != a.Plan.Matches.Count)
+            say($"{a.Plan.Matches.Count - toApply.Matches.Count} file(s) the mod defines itself left to the addition installer");
+
         var deferredArchive = AdditionInstaller.DefaultArchiveRelativePath;
 
         var deferredReplacements = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -200,7 +219,7 @@ internal static class InstallRunner
 
         if (additions is not null)
         {
-            foreach (var match in a.Plan.Matches.Where(m =>
+            foreach (var match in toApply.Matches.Where(m =>
                          m.ArchiveRelativePath.Equals(deferredArchive, StringComparison.OrdinalIgnoreCase)))
                 deferredReplacements[match.EntryName] = match.ModFilePath;
 
@@ -216,8 +235,16 @@ internal static class InstallRunner
         var speed = new StorageSpeed();
 
         say("\nwriting replacements");
+        // The mod's own additions are not replacements, so the replacement pass gives them up.
+        //
+        // The two passes ask different questions of the same folder: "does the game already have
+        // a file by this name" (which a modded game answers yes to, for the mod's own leftovers)
+        // versus "does the mod define this in its .ide" (which only the mod can answer). The
+        // second is the truthful one. Without this, an asset left behind by an earlier round gets
+        // backed up as though the copy in the game were stock - which is how a backup folder came
+        // to hold the modpack's own files under the name of the originals.
         var result = DirectModInstaller.Apply(
-            a.Plan, a.BackupFolder,
+            toApply, a.BackupFolder,
             new Reporter<DirectInstallProgress>(p => say($"   {p.Stage} {p.FilesDone}/{p.FilesTotal}")),
             say, deferRebuildsFor, speed);
 
@@ -227,6 +254,7 @@ internal static class InstallRunner
         {
             say($"\n{speed.Describe()}");
             say("\nINSTALL COMPLETE.");
+            if (speed.Warning() is { } tiredEarly) warn?.Invoke("Give your SD card a rest", tiredEarly);
             return;
         }
 
@@ -294,6 +322,8 @@ internal static class InstallRunner
 
         say($"\n{speed.Describe()}");
         say("\nINSTALL COMPLETE.");
+
+        if (speed.Warning() is { } tired) warn?.Invoke("Give your SD card a rest", tired);
     }
 
     /// <summary>

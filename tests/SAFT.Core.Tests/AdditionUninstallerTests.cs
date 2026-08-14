@@ -64,8 +64,9 @@ public class AdditionUninstallerTests
         Assert.DoesNotContain(archive.Entries, e => e.Name == "saftcastle.dff");
         Assert.Contains(archive.Entries, e => e.Name == "banshee.dff");   // the game's own asset stays
 
-        var saftIde = Path.Combine(game, "data", "maps", "saft", AdditionInstaller.SaftIdeFileName);
-        Assert.DoesNotContain("saftcastle", File.ReadAllText(saftIde));
+        // The lines are not merely emptied out: with the last addition gone, SAFT's whole map folder
+        // goes with it, so there is nothing of SAFT's left in the game to read.
+        Assert.False(Directory.Exists(Path.Combine(game, "data", "maps", "saft")));
     }
 
     [Fact]
@@ -221,5 +222,64 @@ public class AdditionUninstallerTests
 
         // And the slot really is free again as far as a fresh scan is concerned.
         Assert.DoesNotContain(installedId, ObjectIdAllocator.ScanUsedIds(game));
+    }
+    /// <summary>
+    /// Nothing of SAFT's stays in the game once the last addition is out. Removing a mod's lines used
+    /// to leave an empty saft_additions.ide, an empty .ipl and the folder holding them — inert, since
+    /// the gta.dat registration goes at the same moment, but still three files SAFT created sitting
+    /// in the user's data/maps.
+    /// </summary>
+    [Fact]
+    public void Takes_its_own_map_folder_away_once_the_last_addition_is_gone()
+    {
+        var game = BuildGame();
+        var manifest = InstallAndRecord(game, ("My Castle", "castle"));
+        var folder = Path.Combine(game, "data", "maps", "saft");
+
+        Assert.True(Directory.Exists(folder));
+
+        AdditionUninstaller.Remove(game, manifest, new[] { "My Castle" });
+
+        Assert.False(Directory.Exists(folder));
+        Assert.DoesNotContain("saft", File.ReadAllText(Path.Combine(game, "data", "gta.dat")), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// And it stays while anything still depends on it. Taking the folder away with another mod's
+    /// objects still defined in it would unload them mid-session.
+    /// </summary>
+    [Fact]
+    public void Keeps_its_map_folder_while_another_mod_still_has_objects_in_it()
+    {
+        var game = BuildGame();
+        var manifest = InstallAndRecord(game, ("First", "castle"), ("Second", "tower"));
+
+        AdditionUninstaller.Remove(game, manifest, new[] { "First" });
+
+        var folder = Path.Combine(game, "data", "maps", "saft");
+        Assert.True(Directory.Exists(folder));
+
+        var ide = File.ReadAllText(Path.Combine(folder, AdditionInstaller.SaftIdeFileName));
+        Assert.Contains("tower", ide);
+        Assert.DoesNotContain("castle", ide);
+    }
+
+    /// <summary>
+    /// If somebody has put their own file in SAFT's folder, the folder is theirs now. SAFT clears out
+    /// what it created and leaves the rest alone.
+    /// </summary>
+    [Fact]
+    public void Leaves_its_map_folder_if_someone_else_has_put_a_file_in_it()
+    {
+        var game = BuildGame();
+        var manifest = InstallAndRecord(game, ("My Castle", "castle"));
+        var folder = Path.Combine(game, "data", "maps", "saft");
+        File.WriteAllText(Path.Combine(folder, "notes.txt"), "mine, not SAFT's");
+
+        AdditionUninstaller.Remove(game, manifest, new[] { "My Castle" });
+
+        Assert.True(Directory.Exists(folder));
+        Assert.True(File.Exists(Path.Combine(folder, "notes.txt")));
+        Assert.False(File.Exists(Path.Combine(folder, AdditionInstaller.SaftIdeFileName)));
     }
 }

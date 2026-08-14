@@ -226,9 +226,9 @@ public class FoldedRebuildTests
 
         // And everything that is NOT the archive rewrite still happened, or the deferral would be
         // doing half a removal: the map lines are gone and the mod is out of the manifest.
-        Assert.DoesNotContain(
-            "saftcastle",
-            File.ReadAllText(Path.Combine(game, "data", "maps", "saft", AdditionInstaller.SaftIdeFileName)));
+        // With the last addition gone the map folder goes too, which says the same thing more
+        // strongly than reading an emptied file would.
+        Assert.False(Directory.Exists(Path.Combine(game, "data", "maps", "saft")));
         Assert.Empty(manifest.Mods);
         Assert.Equal("My Castle", Assert.Single(removal.RemovedMods));
     }

@@ -100,6 +100,37 @@ public sealed record DirectInstallPlan(
     IReadOnlyList<RefusedScript> RefusedScripts)
 {
     /// <summary>
+    /// The folder these matches were read from — the mod folder on an install, the backup folder on
+    /// an uninstall. Carried so <see cref="DirectModInstaller.Apply"/> can refuse to write backups
+    /// into the same folder it is reading from; see the guard there for why that matters.
+    /// </summary>
+    public string? SourceFolder { get; init; }
+
+    /// <summary>
+    /// The same plan with these file names taken out of it, used to hand the mod's OWN added assets
+    /// over to the addition installer instead of treating them as replacements.
+    ///
+    /// A replacement and an addition are told apart by asking whether the game already holds a file
+    /// of that name — and the game it asks is the modded one in front of it, not a vanilla copy. So
+    /// an asset left in the archive by an earlier round of the same mod comes back as "the game
+    /// already has this", is planned as a replacement, and gets backed up as though the copy sitting
+    /// there were stock. The backup folder ends up holding the MOD under the name of the original.
+    ///
+    /// The addition scan knows better, because it reads what the mod defines in its own .ide. What
+    /// it claims, the replacement pass gives up.
+    /// </summary>
+    public DirectInstallPlan Without(IReadOnlySet<string> fileNames)
+    {
+        if (fileNames.Count == 0) return this;
+
+        return this with
+        {
+            Matches = Matches.Where(m => !fileNames.Contains(m.FileName)).ToList(),
+            UnarchivedMatches = UnarchivedMatches.Where(m => !fileNames.Contains(m.FileName)).ToList(),
+        };
+    }
+
+    /// <summary>
     /// True if any matched file is too big to fit in its original entry's allocated space, meaning
     /// at least one archive can't be simply byte-patched and needs a full rebuild instead.
     /// </summary>
@@ -354,7 +385,10 @@ public static class DirectModInstaller
 
         return new DirectInstallPlan(
             gameRoot, matches, unmatched, foundArchives.Count, audioMatches, audioUnmatched, streamMatches, streamUnmatched,
-            unarchivedMatches, ambiguous, refusedScripts);
+            unarchivedMatches, ambiguous, refusedScripts)
+        {
+            SourceFolder = modSourceFolder,
+        };
     }
 
     /// <summary>
@@ -534,6 +568,43 @@ public static class DirectModInstaller
         // take hours under Winlator.
         progress = new ThrottledProgress<DirectInstallProgress>(progress);
 
+        // Entry names SAFT itself put in the game, read from the record that lives in the backup
+        // folder alongside the originals.
+        //
+        // These must never be backed up. An added asset has no vanilla counterpart — it did not
+        // exist before SAFT wrote it — so a "backup" of one is just a copy of the mod, filed where
+        // restores look for stock files. Reinstalling a mod is what produces them: the second install
+        // finds the first install's assets already in the archive, correctly classifies them as
+        // replacements, finds no existing backup, and takes one.
+        //
+        // The consequences were real. The uninstall then plans to restore those names, the addition
+        // removal deletes them first, and the restore goes looking for entries that are gone — which
+        // is how an uninstall came to die on "Index was out of range". Skipping them here removes the
+        // first link in that chain rather than the last.
+        //
+        // NOT the same thing as the 1.6 bug where a modded file could overwrite a good vanilla
+        // backup; NeedsBackup has guarded that for a long time. This is the case where there is no
+        // vanilla file to protect in the first place.
+        EnsureBackupFolderIsSeparate(plan.SourceFolder, backupOutputFolder);
+
+        var addedBySaft = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (backupOutputFolder is not null)
+        {
+            try
+            {
+                var record = AdditionsManifest.Load(backupOutputFolder);
+                if (record is not null)
+                    foreach (var entry in record.Mods.SelectMany(m => m.ArchiveEntries))
+                        addedBySaft.Add(entry.EntryName);
+            }
+            catch (Exception ex)
+            {
+                // An unreadable record means we cannot tell what SAFT added, so it backs everything
+                // up as before. Erring towards keeping a copy is the safe direction.
+                onStep?.Invoke($"apply: could not read the additions record ({ex.GetType().Name}); backing up everything");
+            }
+        }
+
         var summaries = new List<DirectInstallSummary>();
         var byArchive = plan.Matches.GroupBy(m => m.ArchiveRelativePath).ToList();
         var audioToApply = plan.AudioMatchesThatFit;
@@ -555,7 +626,8 @@ public static class DirectModInstaller
             {
                 BackupOriginals(archiveAbsolutePath, archiveRelativePath, group, backupOutputFolder,
                     (done, total) => progress?.Report(new DirectInstallProgress(
-                        archiveRelativePath, archiveIndex, totalGroups, "Backing up originals", done, total)));
+                        archiveRelativePath, archiveIndex, totalGroups, "Backing up originals", done, total)),
+                    addedBySaft, onStep);
             }
 
             // Adding new assets to an archive rewrites it in full - there is no way to append an
@@ -733,6 +805,64 @@ public static class DirectModInstaller
         return true;
     }
 
+    /// <summary>
+    /// Refuses a backup folder that is the folder being read from, or sits inside it.
+    ///
+    /// On an uninstall the source folder IS the backup folder, and the "keep the files I am taking
+    /// out" box is a free-text path - so it is one paste away from pointing at the same place. When
+    /// it does, the backup pass copies what is currently in the archive over the vanilla original of
+    /// the same name, and the restore that follows puts the modded file back into the game believing
+    /// it to be stock. The user's only good copy is gone, and nothing in the log looks wrong.
+    ///
+    /// Seen for real: a backup folder came out holding SAFT's own added assets filed as vanilla
+    /// originals. Nothing was lost that time because only saft* names were involved and they had no
+    /// vanilla counterpart, but the same path with an ordinary replaced file destroys it.
+    ///
+    /// Called by <see cref="Apply"/> as a backstop, and again by the callers BEFORE they start
+    /// removing added objects. The early call is the one that matters: the removal runs first, so a
+    /// refusal that waited for Apply would land on a game already half taken apart. Priority one is
+    /// that nobody's install is damaged, and a job that will not start is always recoverable.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The two folders are the same, or one is inside the other.</exception>
+    public static void EnsureBackupFolderIsSeparate(string? sourceFolder, string? backupOutputFolder)
+    {
+        if (backupOutputFolder is null || sourceFolder is null) return;
+        if (!SharesGround(sourceFolder, backupOutputFolder)) return;
+
+        throw new InvalidOperationException(
+            "The folder for the files being taken out is the same as the folder being restored from " +
+            $"('{backupOutputFolder}'). Backing up into it would overwrite the originals SAFT is " +
+            "about to put back. Pick a different folder, or turn the backup off.");
+    }
+
+    /// <summary>
+    /// True if two folders are the same folder, or one sits inside the other. Compared as full paths
+    /// with a trailing separator, so "Backups2" is not mistaken for a child of "Backups".
+    /// </summary>
+    private static bool SharesGround(string a, string b)
+    {
+        try
+        {
+            static string Normalise(string p) =>
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(p)) + Path.DirectorySeparatorChar;
+
+            var left = Normalise(a);
+            var right = Normalise(b);
+            var how = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            return left.Equals(right, how)
+                || left.StartsWith(right, how)
+                || right.StartsWith(left, how);
+        }
+        catch
+        {
+            // An unusable path is the caller's problem to report, not a reason to block the job here.
+            return false;
+        }
+    }
+
     private static void BackupAudioOriginal(DirectAudioMatch match, string backupOutputFolder)
     {
         var destPath = Path.Combine(backupOutputFolder, "audio", "sfx", match.MatchKey.Replace('/', Path.DirectorySeparatorChar));
@@ -791,13 +921,26 @@ public static class DirectModInstaller
         StreamIndex.PatchTrack(
             match.StationAbsolutePath, match.HeaderOffset, match.OriginalPayloadLength, match.ModFilePath, onStep);
 
+    /// <param name="addedBySaft">
+    /// Entry names SAFT added to this game. They are skipped: see the note where this set is built.
+    /// </param>
     private static void BackupOriginals(
         string archiveAbsolutePath, string archiveRelativePath, IReadOnlyList<DirectInstallMatch> matches,
-        string backupOutputFolder, Action<int, int>? onProgress)
+        string backupOutputFolder, Action<int, int>? onProgress,
+        IReadOnlySet<string>? addedBySaft = null, Action<string>? onStep = null)
     {
         using var archive = ImgArchive.Open(archiveAbsolutePath);
         for (var i = 0; i < matches.Count; i++)
         {
+            if (addedBySaft is not null && addedBySaft.Contains(matches[i].EntryName))
+            {
+                onStep?.Invoke(
+                    $"apply: '{matches[i].EntryName}' was added by SAFT, so there is no original to " +
+                    "back up - skipped");
+                onProgress?.Invoke(i + 1, matches.Count);
+                continue;
+            }
+
             var entry = archive.Entries.First(e => e.Name.Equals(matches[i].EntryName, StringComparison.OrdinalIgnoreCase));
             var bucket = ImgEntry.GetBucketFolderName(entry.Name);
             var destPath = Path.Combine(backupOutputFolder, archiveRelativePath, bucket, entry.Name);

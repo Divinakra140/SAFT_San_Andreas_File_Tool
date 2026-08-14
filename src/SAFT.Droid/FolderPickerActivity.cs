@@ -49,6 +49,9 @@ public class FolderPickerActivity : Activity
 
     private sealed record Entry(string Label, string? Path, bool IsUp);
 
+    /// <summary>Density-independent pixels, since this screen is built in code too.</summary>
+    private int Dp(double dp) => (int)(dp * (Resources?.DisplayMetrics?.Density ?? 2f));
+
     /// <summary>
     /// The row that goes up a level.
     ///
@@ -69,26 +72,59 @@ public class FolderPickerActivity : Activity
         var prompt = Intent?.GetStringExtra(ExtraPrompt) ?? "Choose a folder";
         Title = prompt;
 
+        // Same as the main screen: the bar repeated the prompt in system chrome directly above where
+        // the prompt is shown properly.
+        try { ActionBar?.Hide(); } catch (Exception) { }
+
         var layout = new LinearLayout(this) { Orientation = Orientation.Vertical };
         layout.SetPadding(16, 16, 16, 16);
 
-        _pathLabel = new TextView(this) { Text = prompt };
-        _pathLabel.SetPadding(8, 8, 8, 16);
-        layout.AddView(_pathLabel);
+        // A way out that does not require knowing the back gesture, and the prompt centred beside it.
+        // Somebody who opened this by accident should not have to work out how to leave.
+        var back = new Button(this) { Text = "Back to SAFT" };
+        back.SetTextSize(Android.Util.ComplexUnitType.Sp, 13);
+        back.Click += (_, _) =>
+        {
+            SetResult(Result.Canceled);
+            Finish();
+        };
+
+        var title = new TextView(this) { Text = prompt };
+        title.SetPadding(Dp(8), Dp(8), Dp(8), Dp(8));
+        title.Gravity = GravityFlags.Center;
+        title.SetTypeface(null, Android.Graphics.TypefaceStyle.Bold);
+        title.SetTextSize(Android.Util.ComplexUnitType.Sp, 16);
+
+        var head = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        head.SetGravity(GravityFlags.CenterVertical);
+        head.AddView(back);
+        head.AddView(title, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        layout.AddView(head);
+
+        // Where you currently are, under the actions rather than in the title - it changes as you
+        // move, and the prompt does not.
+        _pathLabel = new TextView(this);
+        _pathLabel.SetPadding(Dp(8), Dp(2), Dp(8), Dp(6));
+        _pathLabel.SetTextSize(Android.Util.ComplexUnitType.Sp, 13);
 
         // Both actions sit in a fixed row rather than only in the list, because a folder with sixty
         // subfolders scrolls the way out of it off the top of the screen.
         var actions = new LinearLayout(this) { Orientation = Orientation.Horizontal };
 
         _up = new Button(this) { Text = "▲  Up" };
+        _up.SetMinimumHeight(Dp(40));
         _up.Click += (_, _) => GoUp();
         actions.AddView(_up, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
         _useThis = new Button(this) { Text = "Use this folder" };
+        _useThis.SetMinimumHeight(Dp(40));
         _useThis.Click += (_, _) => ChooseCurrent();
         actions.AddView(_useThis, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 2f));
 
         layout.AddView(actions);
+        layout.AddView(_pathLabel);
 
         _list = new ListView(this);
         _list.ItemClick += (_, e) => Open(_entries[e.Position]);

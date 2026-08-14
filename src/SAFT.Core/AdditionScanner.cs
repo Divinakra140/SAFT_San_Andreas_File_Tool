@@ -38,6 +38,14 @@ public sealed record AdditionPlan(
     /// </summary>
     public int SlotsRequired => Definitions.Count;
 
+    /// <summary>
+    /// The file names this mod is ADDING, for the replacement pass to leave alone. An asset claimed
+    /// here must never be planned as a replacement or backed up as a stock original — it is the mod's
+    /// own file, whatever a modded game directory happens to have sitting in it already.
+    /// </summary>
+    public IReadOnlySet<string> AssetFileNames =>
+        NewAssets.Select(a => a.FileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     public bool HasAdditions => NewAssets.Count > 0 || Definitions.Count > 0;
 
     public bool FitsInAvailableSlots => SlotsRequired <= SlotsAvailable;
@@ -58,6 +66,50 @@ public sealed record AdditionPlan(
 /// </summary>
 public static class AdditionScanner
 {
+    /// <summary>
+    /// Reads every definition in the game, for callers that are not already holding them. The ones
+    /// that are (the install paths, which parse the same files to find free object IDs) pass theirs
+    /// in instead — re-reading 60 .ide files per install is the duplication that made SAFT hang on
+    /// an SD card still busy from the previous write.
+    /// </summary>
+    private static IReadOnlyList<IdeDefinition> ReadGameDefinitions(
+        string gameRoot, string modSourceFolder, Action<string>? onStep)
+    {
+        var all = new List<IdeDefinition>();
+        try
+        {
+            foreach (var path in IdeFile.FindAll(gameRoot))
+            {
+                if (IsUnder(path, modSourceFolder)) continue;
+                all.AddRange(IdeFile.Parse(path));
+            }
+        }
+        catch (Exception ex)
+        {
+            // Without these, everything already in the game reads as unclaimed. Say so rather than
+            // silently falling back to the guess that got this wrong in the first place.
+            onStep?.Invoke($"additions: could not read the game's definitions ({ex.GetType().Name}); treating existing files as unclaimed");
+        }
+
+        return all;
+    }
+
+    /// <summary>True if a file sits inside a folder. Compared as full paths, so a sibling whose name
+    /// merely starts the same way is not mistaken for a child.</summary>
+    private static bool IsUnder(string path, string folder)
+    {
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(folder)) return false;
+
+        try
+        {
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)) + Path.DirectorySeparatorChar;
+            var full = Path.GetFullPath(path);
+            var how = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            return full.StartsWith(root, how);
+        }
+        catch { return false; }
+    }
+
     private static readonly string[] AssetExtensions = { ".dff", ".txd", ".col", ".ifp" };
 
     /// <summary>
@@ -77,12 +129,14 @@ public static class AdditionScanner
         GameDensityBaseline? baseline = null,
         IReadOnlySet<int>? usedObjectIds = null,
         Action<string>? onStep = null,
-        GameFiles? modFiles = null)
+        GameFiles? modFiles = null,
+        IReadOnlyList<IdeDefinition>? gameDefinitions = null)
     {
         onStep?.Invoke("additions: reading the mod folder");
         var definitions = new List<IdeDefinition>();
         var placements = new List<IplInstance>();
         var newAssets = new List<NewAsset>();
+        var assetCandidates = new List<NewAsset>();
 
         var listing = GameFiles.For(modSourceFolder, modFiles, onStep);
 
@@ -118,9 +172,91 @@ public static class AdditionScanner
 
             if (!AssetExtensions.Any(e => fileName.EndsWith(e, StringComparison.OrdinalIgnoreCase))) continue;
 
-            // The whole classification hinges on this one question.
-            if (!existsInGame(fileName)) newAssets.Add(new NewAsset(fileName, path));
+            assetCandidates.Add(new NewAsset(fileName, path));
         }
+
+        // Classified only now that every definition has been read, because "is this the game's file
+        // or the mod's own?" cannot be answered from the file name alone.
+        //
+        // An asset the mod DEFINES in its own .ide is the mod's addition, and stays the mod's
+        // addition even when the archive already holds something by that name. What puts it there is
+        // an earlier round of this same mod that did not come all the way out - and the moment SAFT
+        // reads that leftover as a stock file, it files a copy of the MOD in the backup folder as
+        // though it were the original, records no archive entries for the mod, and every uninstall
+        // after that faithfully restores the mod into the game. One missed removal became permanent.
+        //
+        // Going by the mod's own definitions needs no record and no memory of what happened before,
+        // so a game that is already in that state heals on the next install rather than staying stuck.
+        var definedByThisMod = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var definition in definitions)
+        {
+            if (!string.IsNullOrWhiteSpace(definition.ModelName))
+            {
+                definedByThisMod.Add(definition.ModelName + ".dff");
+                definedByThisMod.Add(definition.ModelName + ".col");
+            }
+
+            if (!string.IsNullOrWhiteSpace(definition.TextureName))
+                definedByThisMod.Add(definition.TextureName + ".txd");
+        }
+
+        // Who already DEFINES this object decides who it belongs to.
+        //
+        // A file sitting in the archive says nothing about whose it is. A definition does, and there
+        // are only three cases. Defined in somebody else's .ide: the user's object, whether it
+        // shipped with the game or they added it by hand last week - SAFT replaces the file, keeps a
+        // backup, and writes no map data, because it does not edit map files it did not create.
+        // Defined in saft_additions.ide, or defined nowhere at all: SAFT's, either on the record or
+        // orphaned by an uninstall that did not finish, and either way this mod's to install.
+        //
+        // The orphan case is the one that made this necessary. Asking "does a file by this name
+        // exist" cannot tell an orphan apart from the user's own castle, and getting that wrong in
+        // either direction is destructive: treat the user's castle as SAFT's and their model is
+        // overwritten with no backup and deleted on the next uninstall; treat an orphan as the
+        // user's and a copy of the MOD gets filed as a vanilla original.
+        var ownedModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ownedAssetFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var saftsOwnFile = Path.Combine("maps", AdditionInstaller.SaftMapFolder, AdditionInstaller.SaftIdeFileName);
+        var gameDefs = gameDefinitions ?? ReadGameDefinitions(gameRoot, modSourceFolder, onStep);
+        foreach (var definition in gameDefs)
+        {
+            if (definition.SourcePath.Replace('\\', '/').EndsWith(saftsOwnFile.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // A definition inside the mod folder is the MOD's, whatever it is nested in. People keep
+            // their mod folders inside the game folder, and a walk of the game that wanders into one
+            // would read the pack's own .ide as the game's - concluding the game already defines
+            // these objects and quietly installing none of them.
+            if (IsUnder(definition.SourcePath, modSourceFolder)) continue;
+
+            if (!string.IsNullOrWhiteSpace(definition.ModelName))
+            {
+                ownedModels.Add(definition.ModelName);
+                ownedAssetFiles.Add(definition.ModelName + ".dff");
+                ownedAssetFiles.Add(definition.ModelName + ".col");
+            }
+
+            if (!string.IsNullOrWhiteSpace(definition.TextureName))
+                ownedAssetFiles.Add(definition.TextureName + ".txd");
+        }
+
+        foreach (var candidate in assetCandidates)
+        {
+            if (ownedAssetFiles.Contains(candidate.FileName)) continue;
+            if (!existsInGame(candidate.FileName) || definedByThisMod.Contains(candidate.FileName))
+                newAssets.Add(candidate);
+        }
+
+        // A model the game already defines keeps the definition and the placement it already has.
+        // Adding a second of either is how one object becomes two standing next to each other, on
+        // two different IDs, with the mod's copy pointing at a model the user's line also claims.
+        var supersededDefinitions = definitions.RemoveAll(d => ownedModels.Contains(d.ModelName));
+        var supersededPlacements = placements.RemoveAll(p => ownedModels.Contains(p.ModelName));
+        if (supersededDefinitions > 0 || supersededPlacements > 0)
+            onStep?.Invoke(
+                $"additions: {supersededDefinitions} definition(s) and {supersededPlacements} placement(s) " +
+                "left alone - the game already defines those objects, so they are replacements, not additions");
 
         // Collision is matched to a model BY THE RECORD NAME INSIDE THE BUNDLE, never by the .col
         // file's own name — one bundle called anything at all can carry records for many models. An

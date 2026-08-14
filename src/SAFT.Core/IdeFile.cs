@@ -12,7 +12,15 @@ public sealed record IdeDefinition(
     string TextureName,
     string Section,
     string RawLine,
-    int LineNumber);
+    int LineNumber,
+    /// <summary>
+    /// The .ide this line came from. Which file defines a model is what separates the game's own
+    /// objects from SAFT's: an object defined in saft_additions.ide is SAFT's to update or remove,
+    /// and one defined anywhere else belongs to the user - whether it shipped with the game or they
+    /// added it by hand last week - and SAFT does not write to it. Defaulted so lines built in tests
+    /// and in memory need not carry a path.
+    /// </summary>
+    string SourcePath = "");
 
 /// <summary>
 /// Reads San Andreas .ide (item definition) files — the tables that tell the game what each object
@@ -47,9 +55,9 @@ public static class IdeFile
     };
 
     public static IReadOnlyList<IdeDefinition> Parse(string path) =>
-        ParseLines(File.ReadLines(path));
+        ParseLines(File.ReadLines(path), path);
 
-    public static IReadOnlyList<IdeDefinition> ParseLines(IEnumerable<string> lines)
+    public static IReadOnlyList<IdeDefinition> ParseLines(IEnumerable<string> lines, string sourcePath = "")
     {
         var results = new List<IdeDefinition>();
         string? section = null;
@@ -87,7 +95,8 @@ public static class IdeFile
                 fields[2].Trim(),
                 section,
                 raw,
-                lineNumber));
+                lineNumber,
+                sourcePath));
         }
 
         return results;

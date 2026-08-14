@@ -79,7 +79,8 @@ public class MainActivity : Activity
         bool Option,
         string? OptionFolder,
         Action<string> Say,
-        Func<string, string, SAFT.Core.StreamingSeverity?, bool> Ask);
+        Func<string, string, SAFT.Core.StreamingSeverity?, bool> Ask,
+        Action<string, string> Tell);
 
     /// <summary>
     /// The tabs, as data.
@@ -132,7 +133,7 @@ public class MainActivity : Activity
                         return;
                     }
 
-                    InstallRunner.Apply(analysis, a.Say);
+                    InstallRunner.Apply(analysis, a.Say, a.Tell);
                 }),
             }),
 
@@ -157,7 +158,7 @@ public class MainActivity : Activity
             new[]
             {
                 new ActionSpec("Uninstall mods", true, false, a =>
-                    Jobs.Uninstall(a.Folders[0], a.Folders[1], a.OptionFolder, a.Say)),
+                    Jobs.Uninstall(a.Folders[0], a.Folders[1], a.OptionFolder, a.Say, a.Tell, a.Ask)),
             }),
     };
 
@@ -176,7 +177,7 @@ public class MainActivity : Activity
     private LinearLayout _tabStrip = null!;
     private LinearLayout _panel = null!;
     private TextView _output = null!;
-    private ScrollView _scroller = null!;
+    private FrameLayout _paneFrame = null!;
     private CheckBox? _option;
     private LinearLayout? _optionFolderRow;
     private TextView? _optionFolderLabel;
@@ -187,6 +188,8 @@ public class MainActivity : Activity
     private ScrollView _controlsScroller = null!;
     private LinearLayout _header = null!;
     private ImageButton _logo = null!;
+    private ProgressBar _working = null!;
+    private Android.Graphics.Drawables.AnimationDrawable _toolsFolding = null!;
     private ImageView _title = null!;
 
     /// <summary>Everything the user reads, in black. Grey on clouds was hard to see.</summary>
@@ -194,6 +197,9 @@ public class MainActivity : Activity
 
     private int _tab;
     private bool _busy;
+
+    /// <summary>Set by the engine when storage struggled; shown at the end, with the cooldown.</summary>
+    private string? _storageWarning;
 
     /// <summary>True while the first-run permission screen is up instead of the app.</summary>
     private bool _gateShowing;
@@ -378,16 +384,14 @@ public class MainActivity : Activity
         _logo = new ImageButton(this);
         _logo.SetImageResource(Resource.Drawable.saft_logo);
         _logo.SetScaleType(ImageView.ScaleType.FitCenter);
-        // A framed square, so it reads as a button. Without it the logo is just artwork sitting in a
-        // corner, and nobody presses artwork — which is a problem when it is the only way into the
-        // menu.
-        var frame = new Android.Graphics.Drawables.GradientDrawable();
-        frame.SetColor(Android.Graphics.Color.Transparent);
-        frame.SetStroke(Dp(2), Ink);
-        frame.SetCornerRadius(Dp(6));
-        _logo.Background = frame;
-        _logo.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+        // No frame. It read as a button with one, but the artwork carries the corner better without
+        // it — and now that the logo spins while work is happening, it is visibly a live thing rather
+        // than decoration, which was what the border was compensating for.
+        _logo.SetBackgroundColor(Android.Graphics.Color.Transparent);
+        _logo.SetPadding(0, 0, 0, 0);
         _logo.Click += (_, _) => ShowMenu(_logo);
+
+        _toolsFolding = BuildFoldingTools();
 
         _title = new ImageView(this);
         _title.SetImageResource(Resource.Drawable.saft_title);
@@ -403,23 +407,46 @@ public class MainActivity : Activity
         _tabStrip = new LinearLayout(this) { Orientation = Orientation.Horizontal };
         _panel = new LinearLayout(this) { Orientation = Orientation.Vertical };
 
+        // Sits directly under the title, where the eye already is, and holds its space when hidden so
+        // nothing below it jumps when a job starts.
+        _working = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal)
+        {
+            Indeterminate = true,
+            Visibility = ViewStates.Invisible,
+        };
+
         _controls = new LinearLayout(this) { Orientation = Orientation.Vertical };
         _controls.AddView(_header);
+        _controls.AddView(_working, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, Dp(10)));
         _controls.AddView(_tabStrip);
         _controls.AddView(_panel);
 
+        // The log: ONE view.
+        //
+        // It was a ScrollView wrapping a TextView, wrapped again in a FrameLayout that painted the
+        // background - three views tiling the same space. The log drew grey behind its text whichever
+        // of them was told to be white, through a dozen builds of colours, alphas, drawables, fading
+        // edges and compositing theories. A single view cannot have a seam with itself.
+        //
+        // Scrolling comes from ScrollingMovementMethod rather than a parent ScrollView, which is what
+        // that class is for. The cost is that the text is no longer selectable - the two are mutually
+        // exclusive - so "Copy log" in the menu does that job instead, and does it better than
+        // dragging selection handles down two hundred lines on a handheld.
         _output = new TextView(this);
-        _output.SetTextIsSelectable(true);
-        _output.SetTextSize(Android.Util.ComplexUnitType.Sp, 12);
+        _output.SetTextSize(Android.Util.ComplexUnitType.Sp, 13);
         _output.SetTextColor(Ink);
+        _output.SetBackgroundColor(Android.Graphics.Color.White);
         _output.SetPadding(Dp(8), Dp(8), Dp(8), Dp(8));
+        _output.MovementMethod = new Android.Text.Method.ScrollingMovementMethod();
+        _output.VerticalScrollBarEnabled = true;
+        _output.SetHorizontallyScrolling(false);
 
-        _scroller = new ScrollView(this);
-        _scroller.AddView(_output);
-
-        // The log gets a translucent white pane under it. Black text over cloud detail is legible for
-        // a title and unreadable for forty lines of breadcrumbs.
-        _scroller.SetBackgroundColor(Android.Graphics.Color.Argb(216, 255, 255, 255));
+        _paneFrame = new FrameLayout(this);
+        _paneFrame.SetBackgroundColor(Ink);
+        _paneFrame.SetPadding(Dp(2), Dp(2), Dp(2), Dp(2));
+        _paneFrame.AddView(_output, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
         // The controls scroll too.
         //
@@ -429,10 +456,26 @@ public class MainActivity : Activity
         _controlsScroller = new ScrollView(this);
         _controlsScroller.AddView(_controls);
 
+        // Background REMOVED, not set to a colour.
+        //
+        // A ScrollView here comes with a grey backing from the theme, and SetBackgroundColor never
+        // replaced it - that is the grey that haunted the log for a dozen builds while every view in
+        // that stack was told to be white. Taking the log's ScrollView away made the log white and
+        // moved the grey to this column, which is what finally identified it. Null clears the
+        // drawable outright instead of trying to paint over it.
+        _controlsScroller.Background = null;
+
+        // And the edge effects, which only appear once the column is tall enough to scroll. The grey
+        // wash came back the moment bigger text pushed the content past the viewport, which is what
+        // gave this away - it was never there while everything fit.
+        _controlsScroller.VerticalFadingEdgeEnabled = false;
+        _controlsScroller.HorizontalFadingEdgeEnabled = false;
+        _controlsScroller.OverScrollMode = OverScrollMode.Never;
+
         _root = new LinearLayout(this);
         _root.SetPadding(Dp(10), Dp(6), Dp(10), Dp(6));
         _root.AddView(_controlsScroller);
-        _root.AddView(_scroller);
+        _root.AddView(_paneFrame);
 
         SetContentView(CloudsBackdrop(_root));
 
@@ -448,12 +491,14 @@ public class MainActivity : Activity
     /// </summary>
     private void ShowMenu(View anchor)
     {
+        const string CopyItem = "Copy log";
         const string VerifyItem = "Verify what's in my game";
         const string CheckItem = "Check what this mod adds";
         var accessItem = HasAllFilesAccess() ? "File access: granted" : "Grant file access";
         var buildItem = $"Build {BuildStamp()}";
 
         var popup = new PopupMenu(this, anchor);
+        popup.Menu?.Add(CopyItem);
         popup.Menu?.Add(VerifyItem);
         popup.Menu?.Add(CheckItem);
         popup.Menu?.Add(accessItem);
@@ -463,7 +508,8 @@ public class MainActivity : Activity
         {
             var chosen = e.Item?.TitleFormatted?.ToString();
 
-            if (chosen == VerifyItem) RunVerify();
+            if (chosen == CopyItem) CopyLog();
+            else if (chosen == VerifyItem) RunVerify();
             else if (chosen == CheckItem) RunCheck();
             else if (chosen == accessItem) RequestAllFilesAccess();
 
@@ -472,6 +518,33 @@ public class MainActivity : Activity
         };
 
         popup.Show();
+    }
+
+    /// <summary>
+    /// Puts the whole log on the clipboard.
+    ///
+    /// This is what selectable text used to be for. The log is the thing people send when something
+    /// goes wrong, and a couple of hundred lines of it is not something anyone should be dragging
+    /// selection handles through on a handheld.
+    /// </summary>
+    private void CopyLog()
+    {
+        var text = _output.Text ?? "";
+        if (text.Length == 0)
+        {
+            Say("\nNothing in the log to copy yet.");
+            return;
+        }
+
+        var clipboard = (ClipboardManager?)GetSystemService(ClipboardService);
+        if (clipboard is null)
+        {
+            Say("\nThis device has no clipboard service.");
+            return;
+        }
+
+        clipboard.PrimaryClip = ClipData.NewPlainText("SAFT log", text);
+        Toast.MakeText(this, $"Copied {text.Split('\n').Length} lines", ToastLength.Short)?.Show();
     }
 
     /// <summary>
@@ -490,7 +563,7 @@ public class MainActivity : Activity
         }
 
         Run(new ActionSpec("Check", false, false, a => InstallRunner.Check(a.Folders[0], a.Folders[1], a.Say)),
-            new Args(new[] { game, mod }, false, null, Say, Ask));
+            new Args(new[] { game, mod }, false, null, Say, Ask, Tell));
     }
 
     /// <summary>
@@ -511,7 +584,7 @@ public class MainActivity : Activity
 
         Run(new ActionSpec("Verify", false, false,
                 a => Verify.Report(a.Folders[0], a.Folders[1], a.Folders[2], a.Say)),
-            new Args(new[] { game, mod, backup }, false, null, Say, Ask));
+            new Args(new[] { game, mod, backup }, false, null, Say, Ask, Tell));
     }
 
     /// <summary>
@@ -538,18 +611,27 @@ public class MainActivity : Activity
         // Weighted in BOTH orientations rather than wrapping in portrait: a wrapping column sizes to
         // its content and can push the log off the bottom, which is the same way the Uninstall button
         // went missing sideways. Weighted, everything always fits and the overflow scrolls.
+        // Portrait sizes the controls to their CONTENT rather than to a share of the screen. A fixed
+        // share left a band of empty scroller under the last button and squeezed the log for no
+        // reason; wrapping puts the log's top edge directly beneath the action button and gives it
+        // everything below.
         _controlsScroller.LayoutParameters = landscape
             ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 1.5f)
-            : new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 2.2f);
+            : new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
 
         // In landscape the log sits beside the controls, so its top would otherwise line up with the
         // top of the title. It is inset instead, by the SAME amount top and bottom — which both keeps
         // the title's own top edge clear and leaves the log visually centred in the screen rather
         // than hanging from the top of it.
-        _scroller.LayoutParameters = landscape
+        _paneFrame.LayoutParameters = landscape
             ? new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 1f)
                 { LeftMargin = Dp(10), TopMargin = Dp(26), BottomMargin = Dp(26) }
             : new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f) { TopMargin = Dp(8) };
+
+        // A floor under the log, so a tab whose controls are unusually tall cannot squeeze it to
+        // nothing - it scrolls, but it has to be visible enough to be worth scrolling.
+        _paneFrame.SetMinimumHeight(Dp(landscape ? 0 : 160));
 
         // Taller than before, because the action bar that used to sit above it is gone and the title
         // art is the thing worth spending that space on.
@@ -557,9 +639,8 @@ public class MainActivity : Activity
         _header.LayoutParameters = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, headerHeight);
 
-        // The logo stays square and a little smaller than the bar, so the title has more room and the
-        // button does not become the biggest thing on the screen.
-        var logoSize = (int)(headerHeight * 0.78);
+        // Square, and filling the header now that there is no border around it to leave room for.
+        var logoSize = headerHeight;
         _logo.LayoutParameters = new LinearLayout.LayoutParams(logoSize, logoSize);
     }
 
@@ -578,11 +659,29 @@ public class MainActivity : Activity
     /// stated minimum for a touch target; these are bigger, because the alternative to hitting the
     /// right one is rewriting a 900 MB archive you did not mean to touch.
     /// </summary>
+    /// <summary>
+    /// A white face with a black edge, which is every button in SAFT.
+    ///
+    /// The default button background is the theme's grey, and the tab faces were built with
+    /// Color.Argb - which does not render as asked on this device, the same trap that hid the log's
+    /// grey for a dozen builds. Color.White is a named property and does.
+    /// </summary>
+    private Android.Graphics.Drawables.GradientDrawable ButtonFace(int strokeDp)
+    {
+        var face = new Android.Graphics.Drawables.GradientDrawable();
+        face.SetColor(Android.Graphics.Color.White);
+        face.SetCornerRadius(Dp(4));
+        face.SetStroke(Dp(strokeDp), Ink);
+        return face;
+    }
+
     private Button BigButton(string text)
     {
         var button = new Button(this) { Text = text };
-        button.SetTextSize(Android.Util.ComplexUnitType.Sp, 15);
-        button.SetMinimumHeight(Dp(54));
+        button.SetTextSize(Android.Util.ComplexUnitType.Sp, 13);
+        button.SetMinimumHeight(Dp(36));
+        button.SetTextColor(Ink);
+        button.Background = ButtonFace(1);
         return button;
     }
 
@@ -613,18 +712,29 @@ public class MainActivity : Activity
         _optionFolderRow = null;
         _optionFolderLabel = null;
 
-        // The selected tab is the bold one. Buttons rather than a real tab widget, because five
-        // scrolling buttons behave better under a thumb than a TabHost on a 5-inch screen.
+        // The selected tab is the OUTLINED one, not the bold one.
+        //
+        // Bold-versus-regular was the wrong signal: it made the unselected tab look greyed out, and
+        // greyed out means unpressable. Both now read as equally live - black, bold, identical - and
+        // selection is carried by a thick dark border, which says "you are here" rather than "that
+        // one is off".
+        //
+        // Buttons rather than a real tab widget, because a row of them behaves better under a thumb
+        // than a TabHost on a handheld.
         for (var i = 0; i < _tabStrip.ChildCount; i++)
-            if (_tabStrip.GetChildAt(i) is Button tab)
-                tab.SetTypeface(null, i == index
-                    ? Android.Graphics.TypefaceStyle.Bold
-                    : Android.Graphics.TypefaceStyle.Normal);
+        {
+            if (_tabStrip.GetChildAt(i) is not Button tab) continue;
+
+            tab.Background = ButtonFace(i == index ? 4 : 1);
+            tab.SetTextColor(Ink);
+            tab.SetTypeface(null, Android.Graphics.TypefaceStyle.Bold);
+        }
 
         var what = new TextView(this) { Text = spec.What };
         what.SetPadding(0, Dp(4), 0, 0);
-        what.SetTextSize(Android.Util.ComplexUnitType.Sp, 13);
+        what.SetTextSize(Android.Util.ComplexUnitType.Sp, 15);
         what.SetTextColor(Ink);
+        what.SetTypeface(null, Android.Graphics.TypefaceStyle.Bold);
         _panel.AddView(what);
 
         foreach (var (caption, prompt) in spec.Folders)
@@ -633,8 +743,9 @@ public class MainActivity : Activity
         if (spec.Warning is not null)
         {
             var warning = new TextView(this) { Text = spec.Warning };
-            warning.SetTextSize(Android.Util.ComplexUnitType.Sp, 13);
-            warning.SetTextColor(Android.Graphics.Color.Argb(255, 170, 30, 30));
+            warning.SetTextSize(Android.Util.ComplexUnitType.Sp, 15);
+            warning.SetTextColor(Android.Graphics.Color.Rgb(170, 30, 30));
+            warning.SetTypeface(null, Android.Graphics.TypefaceStyle.Bold);
             warning.SetPadding(0, Dp(10), 0, Dp(2));
             _panel.AddView(warning);
         }
@@ -643,6 +754,8 @@ public class MainActivity : Activity
         {
             _option = new CheckBox(this) { Text = spec.OptionLabel };
             _option.SetTextColor(Ink);
+            _option.SetTextSize(Android.Util.ComplexUnitType.Sp, 15);
+            _option.SetTypeface(null, Android.Graphics.TypefaceStyle.Bold);
             _panel.AddView(_option);
 
             if (spec.OptionFolder is { } optional)
@@ -670,6 +783,16 @@ public class MainActivity : Activity
             buttons.AddView(button, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WrapContent, action.Writes ? 2f : 1f));
             _actionButtons.Add(button);
+        }
+
+        // A lone action button is centred and narrow. Two of them share the row and earn its full
+        // width; one stretched across the column just looks like the screen is missing something
+        // beside it. Equal spacers either side do the centring, so the button keeps its weight and
+        // the row stays a plain LinearLayout.
+        if (spec.Actions.Count == 1)
+        {
+            buttons.AddView(new View(this), 0, new LinearLayout.LayoutParams(0, 1, 0.75f));
+            buttons.AddView(new View(this), new LinearLayout.LayoutParams(0, 1, 0.75f));
         }
 
         _panel.AddView(buttons);
@@ -701,13 +824,15 @@ public class MainActivity : Activity
         top.SetGravity(GravityFlags.CenterVertical);
 
         var heading = new TextView(this) { Text = caption };
-        heading.SetTextSize(Android.Util.ComplexUnitType.Sp, 16);
+        heading.SetTextSize(Android.Util.ComplexUnitType.Sp, 20);
         heading.SetTypeface(null, Android.Graphics.TypefaceStyle.Bold);
         heading.SetTextColor(Ink);
         top.AddView(heading);
 
         var button = new Button(this) { Text = "Choose" };
-        button.SetMinimumHeight(Dp(46));
+        button.SetMinimumHeight(Dp(40));
+        button.SetTextColor(Ink);
+        button.Background = ButtonFace(1);
         button.Click += (_, _) => PickFolder(caption, prompt);
         top.AddView(button, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { LeftMargin = Dp(10) });
@@ -717,8 +842,9 @@ public class MainActivity : Activity
         // One line, ellipsised in the MIDDLE. A path's two informative ends are the volume it is on
         // and the folder it names; the twelve characters in between are what can be spared.
         var label = new TextView(this);
-        label.SetTextSize(Android.Util.ComplexUnitType.Sp, 13);
+        label.SetTextSize(Android.Util.ComplexUnitType.Sp, 15);
         label.SetTextColor(Ink);
+        label.SetTypeface(null, Android.Graphics.TypefaceStyle.Bold);
         label.SetSingleLine(true);
         label.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
         container.AddView(label);
@@ -835,7 +961,7 @@ public class MainActivity : Activity
             }
         }
 
-        var args = new Args(folders, option, optionFolder, Say, Ask);
+        var args = new Args(folders, option, optionFolder, Say, Ask, Tell);
 
         // An action that shows its own findings does not get a bare confirmation in front of it.
         if (!action.Writes || action.OwnConfirm)
@@ -929,6 +1055,101 @@ public class MainActivity : Activity
         return new Android.Graphics.Drawables.BitmapDrawable(Resources, bitmap);
     }
 
+    /// <summary>
+    /// Recorded rather than shown. The engine calls this the moment it notices the storage struggled,
+    /// which is mid-job; putting a dialog up then would interrupt work still in progress. It is shown
+    /// at the end instead, inside the cooldown that follows every write.
+    /// </summary>
+    private void Tell(string title, string message) => _storageWarning = message;
+
+    /// <summary>
+    /// A minute's pause after anything that wrote to the game, with the option to skip it.
+    ///
+    /// SAFT can now finish an install in seconds, and that is the problem: an SD card that has just
+    /// taken a burst of writes is still flushing them long after SAFT says it is done, and a game
+    /// launched into that stalls on its first load. The user blames the mod, because the mod is what
+    /// changed. Being fast made this MORE likely, not less - the tool now gets out of the way while
+    /// the card is still busy.
+    ///
+    /// Sixty seconds is a pause, not a fix. It is dismissible on purpose: someone installing three
+    /// mods in a row should not be made to sit through it each time, and someone whose game is on
+    /// internal storage does not need it at all. The point is that nobody launches the game without
+    /// having been told.
+    /// </summary>
+    /// <param name="seconds">
+    /// Zero means no countdown - just the warning. That is the internal-storage case: there is
+    /// nothing to wait for, but if the write was measurably slow it is still worth saying so.
+    /// </param>
+    private void ShowCooldown(int seconds)
+    {
+        var remaining = seconds;
+
+        // Taken once, up front. Read from the field inside Text() and it vanishes on the first tick,
+        // because the field is cleared as soon as the dialog is shown - so the real warning appeared
+        // for one second and then reverted to the generic line.
+        var warning = _storageWarning;
+        _storageWarning = null;
+
+        var body = new TextView(this);
+        body.SetPadding(Dp(24), Dp(20), Dp(24), Dp(8));
+        body.SetTextSize(Android.Util.ComplexUnitType.Sp, 15);
+        body.SetTextColor(Ink);
+
+        string Text() =>
+            (warning is null
+                ? "Your game is on an SD card, and it is still finishing these writes. Give it a " +
+                  "moment before you launch, or the first load can stall.\n\n"
+                : warning + "\n\n") +
+            (seconds <= 0 ? "" : remaining > 0 ? $"Ready in {remaining}s" : "Ready — you can launch the game.");
+
+        body.Text = Text();
+
+        var dialog = new AlertDialog.Builder(this)
+            .SetTitle(warning is not null ? "Your SD card is struggling" : "Let your SD card settle")!
+            .SetView(body)!
+            .SetCancelable(true)!
+            .SetPositiveButton("Dismiss", (_, _) => { })!
+            .Create()!;
+
+        dialog.Show();
+
+        // Ticks on the UI thread and stops itself the moment the dialog goes away, so dismissing it
+        // early does not leave a timer running against a window that no longer exists.
+        var handler = new Android.OS.Handler(Android.OS.Looper.MainLooper!);
+        void Tick()
+        {
+            if (!dialog.IsShowing) return;
+
+            remaining--;
+            body.Text = Text();
+
+            if (remaining > 0) handler.PostDelayed(Tick, 1000);
+        }
+
+        if (seconds > 0) handler.PostDelayed(Tick, 1000);
+    }
+
+    /// <summary>
+    /// Is this folder on an SD card rather than internal storage?
+    ///
+    /// This decides whether the cooldown means anything. An SD card is still flushing writes after
+    /// SAFT reports finished, and a game launched into that stalls on its first load; internal
+    /// storage does not behave that way, so making somebody wait for it would be a minute of nothing
+    /// followed by a habit of ignoring the dialog.
+    ///
+    /// Android puts internal shared storage under /storage/emulated/0 and mounts every removable
+    /// volume as /storage/&lt;id&gt;, so the path is the answer.
+    /// </summary>
+    private static bool IsOnRemovableStorage(string path)
+    {
+        var internalRoot = Android.OS.Environment.ExternalStorageDirectory?.AbsolutePath;
+        if (!string.IsNullOrEmpty(internalRoot) &&
+            path.StartsWith(internalRoot, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return path.StartsWith("/storage/", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void Run(ActionSpec action, Args args)
     {
         _output.Text = "";
@@ -948,6 +1169,14 @@ public class MainActivity : Activity
             {
                 action.Run(args);
                 Say($"\ntook {clock.Elapsed.TotalSeconds:N1} s");
+
+                // After anything that wrote - but only where the wait means something. See below.
+                if (action.Writes && args.Folders.Count > 0)
+                {
+                    var onSdCard = IsOnRemovableStorage(args.Folders[0]);
+                    if (onSdCard || _storageWarning is not null)
+                        RunOnUiThread(() => ShowCooldown(onSdCard ? 60 : 0));
+                }
             }
             catch (Exception ex)
             {
@@ -974,6 +1203,62 @@ public class MainActivity : Activity
     {
         _busy = busy;
         foreach (var button in _actionButtons) button.Enabled = !busy;
+        SpinLogo(busy);
+    }
+
+    /// <summary>
+    /// Shows the working bar while a job runs.
+    ///
+    /// This was a spinning logo, which moved constantly and was unpleasant to sit and watch for the
+    /// minute a rewrite can take. A bar says the same thing - something is happening, do not close
+    /// this - without asking anyone to look at it.
+    /// </summary>
+    private void SpinLogo(bool working)
+    {
+        _working.Visibility = working ? ViewStates.Visible : ViewStates.Invisible;
+
+        if (working)
+        {
+            _logo.SetImageDrawable(_toolsFolding);
+            _toolsFolding.Start();
+        }
+        else
+        {
+            _toolsFolding.Stop();
+            _logo.SetImageResource(Resource.Drawable.saft_logo);
+        }
+    }
+
+    /// <summary>
+    /// The tool folding its blades in and out, played while a job runs.
+    ///
+    /// Eight hand-drawn frames of the logo rather than a generic spinner, and it says the same thing
+    /// the bar underneath says - something is happening, do not close this - in the app's own voice.
+    /// It replaced a rotating copy of the logo, which moved constantly and was unpleasant to watch
+    /// for the minute an archive rewrite can take. This one has a rhythm instead of a spin.
+    ///
+    /// Built once and reused: an AnimationDrawable holds all eight bitmaps, and building a fresh one
+    /// every time a job started would decode them again each time.
+    /// </summary>
+    private Android.Graphics.Drawables.AnimationDrawable BuildFoldingTools()
+    {
+        var frames = new[]
+        {
+            Resource.Drawable.saft_logo_01, Resource.Drawable.saft_logo_02,
+            Resource.Drawable.saft_logo_03, Resource.Drawable.saft_logo_04,
+            Resource.Drawable.saft_logo_05, Resource.Drawable.saft_logo_06,
+            Resource.Drawable.saft_logo_07, Resource.Drawable.saft_logo_08,
+        };
+
+        var animation = new Android.Graphics.Drawables.AnimationDrawable();
+        foreach (var frame in frames)
+        {
+            var drawable = Resources?.GetDrawable(frame, Theme);
+            if (drawable is not null) animation.AddFrame(drawable, 110);
+        }
+
+        animation.OneShot = false;
+        return animation;
     }
 
     private static string ModNameFrom(string modFolder) => Path.GetFileName(modFolder.TrimEnd('/'));
@@ -1034,6 +1319,17 @@ public class MainActivity : Activity
     private void Say(string line) => RunOnUiThread(() =>
     {
         _output.Text += line + "\n";
-        _scroller.Post(() => _scroller.FullScroll(FocusSearchDirection.Down));
+        // Follow the tail. A TextView scrolled by ScrollingMovementMethod has no FullScroll, so the
+        // bottom is worked out from the laid-out text - and only once it HAS been laid out, which is
+        // why this is posted rather than run inline.
+        _output.Post(() =>
+        {
+            var laid = _output.Layout;
+            if (laid is null) return;
+
+            var bottom = laid.GetLineTop(_output.LineCount) - _output.Height
+                       + _output.PaddingTop + _output.PaddingBottom;
+            _output.ScrollTo(0, bottom > 0 ? bottom : 0);
+        });
     });
 }

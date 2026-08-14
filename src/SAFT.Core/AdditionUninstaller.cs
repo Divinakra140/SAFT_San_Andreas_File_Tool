@@ -191,7 +191,11 @@ public static class AdditionUninstaller
 
         // The gta.dat registration is shared by every addition, so it only comes out once nothing is
         // left that depends on it — removing it early would stop other mods' objects loading.
-        if (manifest.Mods.Count == 0) RemoveGtaDatRegistration(gameRoot);
+        if (manifest.Mods.Count == 0)
+        {
+            RemoveGtaDatRegistration(gameRoot);
+            RemoveEmptySaftMapFiles(gameRoot, onStep);
+        }
 
         onStep?.Invoke(
             $"removal: complete - {removedMods.Count} mod(s), {entriesRemoved} entry/entries removed here, " +
@@ -515,6 +519,53 @@ public static class AdditionUninstaller
             skipped.Add($"collision for '{missing}' was already gone from {bundleName}");
 
         return ColBundle.Write(kept);
+    }
+
+    /// <summary>
+    /// Takes away SAFT's own map folder once the last addition has gone.
+    ///
+    /// Removing a mod's lines leaves the files that held them: a saft_additions.ide with nothing but
+    /// its header between "objs" and "end", the same for the .ipl, and the folder around them. The
+    /// game no longer loads any of it — the gta.dat registration comes out just above — so it is
+    /// inert, but a tool that promises to put the game back the way it found it should not leave
+    /// three files it created sitting in data/maps.
+    ///
+    /// Both files must parse as genuinely empty before either is deleted. Anything still in them
+    /// means a line did not come out, and deleting a file that still has content in it is a far worse
+    /// outcome than leaving an empty one behind.
+    /// </summary>
+    private static void RemoveEmptySaftMapFiles(string gameRoot, Action<string>? onStep)
+    {
+        var folder = Path.Combine(gameRoot, "data", "maps", AdditionInstaller.SaftMapFolder);
+        if (!Directory.Exists(folder)) return;
+
+        var idePath = Path.Combine(folder, AdditionInstaller.SaftIdeFileName);
+        var iplPath = Path.Combine(folder, AdditionInstaller.SaftIplFileName);
+
+        try
+        {
+            if (File.Exists(idePath) && IdeFile.Parse(idePath).Count > 0) return;
+            if (File.Exists(iplPath) && IplFile.Parse(iplPath).Count > 0) return;
+
+            if (File.Exists(idePath)) File.Delete(idePath);
+            if (File.Exists(iplPath)) File.Delete(iplPath);
+
+            // Only if nothing else has been put in there by somebody else.
+            if (Directory.EnumerateFileSystemEntries(folder).Any())
+            {
+                onStep?.Invoke("removal: left SAFT's map folder in place - it holds files SAFT did not create");
+                return;
+            }
+
+            Directory.Delete(folder);
+            onStep?.Invoke("removal: SAFT's map folder is gone - nothing of SAFT's is left in the game");
+        }
+        catch (Exception ex)
+        {
+            // The uninstall has already done everything that matters. Failing to tidy up must not
+            // turn a successful removal into a failure.
+            onStep?.Invoke($"removal: could not remove SAFT's empty map folder ({ex.GetType().Name}: {ex.Message})");
+        }
     }
 
     private static void RemoveGtaDatRegistration(string gameRoot)

@@ -34,8 +34,38 @@ internal static class Jobs
     /// claims to be one mod and is really two. What comes out of a game has to stay separable, or
     /// putting it back is guesswork.
     /// </param>
-    public static void Uninstall(string gameFolder, string backupFolder, string? modBackupFolder, Action<string> say)
+    /// <param name="warn">
+    /// Puts a warning in front of the user rather than in the log. Used for the one thing they need
+    /// to act on: an SD card that slowed down while being written, which can stall the game's first
+    /// load if they go straight back to playing.
+    /// </param>
+    /// <param name="ask">
+    /// Puts a question in front of the user and waits for the answer. Used for the one thing worth
+    /// stopping for: a backup folder whose record was written for a different game folder.
+    /// </param>
+    public static void Uninstall(
+        string gameFolder, string backupFolder, string? modBackupFolder, Action<string> say,
+        Action<string, string>? warn = null,
+        Func<string, string, StreamingSeverity?, bool>? ask = null)
     {
+        // Before anything is read or written: does this backup folder's record belong to this game?
+        //
+        // The two folders are picked separately, so one game's backup folder can be pointed at
+        // another game. The uninstall then finds nothing of the record to remove while the game those
+        // assets are really in keeps them. A warning rather than a refusal - a second copy of the
+        // same game is an ordinary thing to have, and SAFT cannot tell that apart from a slip.
+        var recordedRoot = AdditionsManifest.Load(backupFolder)?.GameRootPath;
+        if (GameFolderCheck.LooksLikeADifferentGame(recordedRoot, gameFolder))
+        {
+            say($"note: this backup folder's record was written for {recordedRoot}");
+            if (ask is not null
+                && !ask("Different game folder", GameFolderCheck.Warning(recordedRoot), StreamingSeverity.Caution))
+            {
+                say("\nUNINSTALL CANCELLED - nothing was written.");
+                return;
+            }
+        }
+
         say($"restoring {gameFolder}\n     from {backupFolder}");
 
         // Same safety net as the install path: an archive left half-edited by an interrupted run is
@@ -46,6 +76,10 @@ internal static class Jobs
         say(modBackupFolder is null
             ? "the mod files being removed are not being kept"
             : $"the mod files being removed will be kept in {modBackupFolder}");
+
+        // Before anything is written. The additions removal below touches the game, so a refusal
+        // that waited for the restore would land on a half-uninstalled game.
+        DirectModInstaller.EnsureBackupFolderIsSeparate(backupFolder, modBackupFolder);
 
         var plan = DirectModInstaller.Plan(gameFolder, backupFolder, say);
         say($"{plan.Matches.Count} archived + {plan.UnarchivedMatches.Count} loose + " +
@@ -102,7 +136,22 @@ internal static class Jobs
         {
             try
             {
-                reclaimed += ImgArchiveEditor.Compact(found.AbsolutePath, say, speed);
+                // Counted out loud. This rewrites a whole archive and has taken three to four
+                // minutes on tired storage; silence for that long reads as a hang, and a user who
+                // closes SAFT during it is interrupting a rewrite of their game. Every tenth is
+                // enough to show movement without filling the log.
+                var lastTenth = -1;
+
+                reclaimed += ImgArchiveEditor.Compact(
+                    found.AbsolutePath, say, speed,
+                    (done, count) =>
+                    {
+                        if (count <= 0) return;
+                        var tenth = done * 10 / count;
+                        if (tenth == lastTenth) return;
+                        lastTenth = tenth;
+                        say($"   {found.RelativePath} {done:N0}/{count:N0} ({tenth * 10}%)");
+                    });
             }
             catch (Exception ex)
             {
@@ -118,6 +167,8 @@ internal static class Jobs
 
         say($"\n{speed.Describe()}");
         say("\nUNINSTALL COMPLETE.");
+
+        if (speed.Warning() is { } tired) warn?.Invoke("Give your SD card a rest", tired);
     }
 
     /// <summary>

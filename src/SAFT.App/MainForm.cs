@@ -1202,6 +1202,10 @@ public partial class MainForm : Form
             HashSet<string>? existingNames = null;
             GameDensityBaseline? gameBaseline = null;
             IReadOnlySet<int>? gameUsedIds = null;
+            // Kept alongside the ids and the baseline for the same reason they are: the reinstall
+            // scan below needs to know which objects the game already defines, and re-reading every
+            // .ide to find out is the duplicated work that made SAFT hang on a busy SD card.
+            IReadOnlyList<IdeDefinition>? gameDefinitions = null;
 
             if (!affectsStreaming)
             {
@@ -1233,10 +1237,12 @@ public partial class MainForm : Form
                 var usedIds = await Task.Run(() => ObjectIdAllocator.UsedIdsFrom(gameMap.Definitions));
                 gameUsedIds = usedIds;
                 gameBaseline = gameMap.Baseline;
+                gameDefinitions = gameMap.Definitions;
 
                 ActivityLog.Note($"install: {usedIds.Count:N0} object id(s) in use; scanning the mod folder for additions");
                 additions = await Task.Run(() => AdditionScanner.Scan(
-                    gameFolder, modFolder, existing.Contains, gameMap.Baseline, usedIds, ActivityLog.Note, modListing));
+                    gameFolder, modFolder, existing.Contains, gameMap.Baseline, usedIds, ActivityLog.Note, modListing,
+                    gameDefinitions: gameMap.Definitions));
 
                 // What the mod does to the streaming budget — this applies to replacement-only mods too,
                 // which is where an over-heavy pack quietly stops the world rendering.
@@ -1390,6 +1396,11 @@ public partial class MainForm : Form
 
             var backupFolder = DirectBackupDestBox.Text;
 
+            // Before anything is written. Backing the originals up into the mod folder itself would
+            // file them alongside the mod's own files, where the next scan reads them back as things
+            // to install.
+            DirectModInstaller.EnsureBackupFolderIsSeparate(modFolder, backupFolder);
+
             // Adding assets rewrites the target archive in full, and so does replacing a file that no
             // longer fits. Doing both meant writing models\gta3.img - 940 MB - out twice in a single
             // install; the first pass took 36.8 seconds and the process was killed during the second.
@@ -1406,6 +1417,18 @@ public partial class MainForm : Form
                                             a.FileName.EndsWith(".dff", StringComparison.OrdinalIgnoreCase)
                                             || a.FileName.EndsWith(".txd", StringComparison.OrdinalIgnoreCase)));
 
+            // Worked out BEFORE the fold, not just before the write.
+            //
+            // The mod's own additions are not replacements, and the fold below reads the replacement
+            // plan to decide what to carry into the additions rewrite. Filtering only at the Apply
+            // call left the fold reading the UNFILTERED plan, so an asset the mod defines was handed
+            // over as a replacement and installed as an addition both - and in the rewrite loop a
+            // replacement is checked before a removal, so the old copy was kept and the new one
+            // appended beside it. Seven leftovers came out as fourteen entries under seven names.
+            var toApply = installAdditions && additions is not null ? plan.Without(additions.AssetFileNames) : plan;
+            if (toApply.Matches.Count != plan.Matches.Count)
+                ActivityLog.Note($"install: {plan.Matches.Count - toApply.Matches.Count} file(s) the mod defines itself left to the addition installer");
+
             var deferredArchive = AdditionInstaller.DefaultArchiveRelativePath;
             var deferredReplacements = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             IReadOnlySet<string>? deferRebuildsFor = null;
@@ -1417,7 +1440,7 @@ public partial class MainForm : Form
 
             if (foldIntoAdditions)
             {
-                foreach (var m in plan.Matches.Where(m =>
+                foreach (var m in toApply.Matches.Where(m =>
                              m.ArchiveRelativePath.Equals(deferredArchive, StringComparison.OrdinalIgnoreCase)))
                     deferredReplacements[m.EntryName] = m.ModFilePath;
 
@@ -1437,7 +1460,15 @@ public partial class MainForm : Form
             // device going from 30 seconds an archive to 183 for the same 940 MB.
             var speed = new StorageSpeed();
 
-            var result = await Task.Run(() => DirectModInstaller.Apply(plan, backupFolder, progress, ActivityLog.Note, deferRebuildsFor, speed));
+            // The mod's own additions are not replacements, so the replacement pass gives them up.
+            //
+            // The two passes ask different questions of the same folder: "does the game already have
+            // a file by this name" (which a modded game answers yes to, for the mod's own leftovers)
+            // versus "does the mod define this in its .ide" (which only the mod can answer). The
+            // second is the truthful one. Without this, an asset left behind by an earlier round gets
+            // backed up as though the copy in the game were stock - which is how a backup folder came
+            // to hold the modpack's own files under the name of the originals.
+            var result = await Task.Run(() => DirectModInstaller.Apply(toApply, backupFolder, progress, ActivityLog.Note, deferRebuildsFor, speed));
 
             AdditionInstallResult? added = null;
             if (installAdditions && additions is not null)
@@ -1544,7 +1575,8 @@ public partial class MainForm : Form
                     additions = await Task.Run(() => AdditionScanner.Scan(
                         gameFolder, modFolder, names.Contains,
                         baseline: gameBaseline, usedObjectIds: gameUsedIds,
-                        onStep: ActivityLog.Note, modFiles: modListing));
+                        onStep: ActivityLog.Note, modFiles: modListing,
+                        gameDefinitions: gameDefinitions));
 
                     // A name can be on both lists: coming out with the old copy, and going back in
                     // from the mod folder. Exactly one route must put it back, or the archive ends up
@@ -1772,6 +1804,32 @@ public partial class MainForm : Form
             return;
         }
 
+        // Before anything is read or written: does this backup folder's record belong to this game?
+        //
+        // The two folders are picked separately, so one game's backup folder can be pointed at
+        // another game. The uninstall then finds nothing of the record to remove while the game those
+        // assets are really in keeps them - which is the most likely account of how seven assets came
+        // to be orphaned. A warning rather than a refusal: a second copy of the same game is an
+        // ordinary thing to have, and SAFT cannot tell that apart from a slip.
+        var recordedRoot = AdditionsManifest.Load(backupFolder)?.GameRootPath;
+        if (GameFolderCheck.LooksLikeADifferentGame(recordedRoot, gameFolder))
+        {
+            ActivityLog.Note($"uninstall: record was written for {recordedRoot}, this game is {gameFolder}");
+            using var mismatch = new ConfirmDialog(
+                GameFolderCheck.Warning(recordedRoot),
+                "Uninstall anyway",
+                "Cancel",
+                StreamingSeverity.Caution);
+            mismatch.ShowDialog(this);
+            if (!mismatch.Result)
+            {
+                ActivityLog.Note("uninstall: cancelled at the folder mismatch warning");
+                return;
+            }
+
+            ActivityLog.Note("uninstall: user chose to continue past the folder mismatch warning");
+        }
+
         UninstallProgressBar.Value = 0;
         UninstallSubProgressBar.Value = 0;
         UninstallSubProgressText.Text = "Checking backup files against the live game…";
@@ -1862,14 +1920,21 @@ public partial class MainForm : Form
                     $"[{p.ArchiveIndex}/{p.ArchiveCount}] {p.CurrentArchive}: {p.Stage} — file {p.FilesDone:N0} of {p.FilesTotal:N0}";
             });
 
-            var modBackupFolder = makeModBackup ? UninstallBackupDestBox.Text : null;
-            ActivityLog.Note($"uninstall: restoring, mod backup {(modBackupFolder is null ? "off" : "to " + modBackupFolder)}");
-            var speed = new StorageSpeed();
-            var result = await Task.Run(() => DirectModInstaller.Apply(
-                plan, modBackupFolder, progress, ActivityLog.Note, deferRebuildsFor: null, speed: speed));
-            ActivityLog.Note($"uninstall: restore finished - {result.Archives.Sum(s => s.FilesReplaced)} entry/entries across {result.Archives.Count} archive(s), {result.Unarchived.Count} loose file(s)");
+            // Checked here rather than left to Apply, because the additions removal below writes to
+            // the game. A refusal that waited for the restore would land on a half-uninstalled game.
+            var modBackupFolderChoice = makeModBackup ? UninstallBackupDestBox.Text : null;
+            DirectModInstaller.EnsureBackupFolderIsSeparate(backupFolder, modBackupFolderChoice);
 
-            // Additions come out first: their removal rebuilds the archive, and doing it before the
+            var speed = new StorageSpeed();
+            // Additions come out FIRST, and this order is load-bearing rather than merely tidy.
+            //
+            // Restoring first meant the restore pass found SAFT's own added entries still sitting in
+            // the archive, backed them up as though they were vanilla originals, and left the removal
+            // to run afterwards - which emptied the record while the seven assets stayed in gta3.img.
+            // The Android build has always done it this way round; this one had drifted away from the
+            // order its own comment described.
+            //
+            // It is also the cheaper order: the removal rebuilds the archive, so doing it before the
             // ordinary restores keeps the two from rebuilding the same archive twice.
             AdditionRemovalResult? removed = null;
             if (modsToRemove.Count > 0 && additionsManifest is not null)
@@ -1895,6 +1960,12 @@ public partial class MainForm : Form
                 ActivityLog.Note("uninstall: record written");
             }
 
+            var modBackupFolder = modBackupFolderChoice;
+            ActivityLog.Note($"uninstall: restoring, mod backup {(modBackupFolder is null ? "off" : "to " + modBackupFolder)}");
+            var result = await Task.Run(() => DirectModInstaller.Apply(
+                plan, modBackupFolder, progress, ActivityLog.Note, deferRebuildsFor: null, speed: speed));
+            ActivityLog.Note($"uninstall: restore finished - {result.Archives.Sum(s => s.FilesReplaced)} entry/entries across {result.Archives.Count} archive(s), {result.Unarchived.Count} loose file(s)");
+
             // Last, once nothing else will touch these archives: give the space back.
             //
             // Editing in place is what makes SAFT quick, and dead space is the price. Removing an
@@ -1910,14 +1981,38 @@ public partial class MainForm : Form
             UninstallSubProgressText.Text = "Packing out unused space…";
             ActivityLog.Note("uninstall: packing out unused space");
 
+            // Reported like every other long step, and for the reason SAFT reports any of them: this
+            // rewrites a whole archive, and on tired storage that has run for three to four minutes.
+            // A progress bar that never moves is how a user decides the app has hung and closes it
+            // in the middle of a rewrite of their game.
+            var packProgress = new Progress<DirectInstallProgress>(p =>
+            {
+                UninstallSubProgressText.Text = $"{p.Stage} — {p.FilesDone:N0} of {p.FilesTotal:N0}";
+                UninstallSubProgressBar.Maximum = Math.Max(1, p.FilesTotal);
+                UninstallSubProgressBar.Value = Math.Clamp(p.FilesDone, 0, UninstallSubProgressBar.Maximum);
+            });
+
             var reclaimed = await Task.Run(() =>
             {
                 long total = 0;
-                foreach (var found in GameScanner.FindArchives(gameFolder))
+                var archives = GameScanner.FindArchives(gameFolder);
+                var archiveNumber = 0;
+
+                foreach (var found in archives)
                 {
+                    archiveNumber++;
+                    var stage = $"Packing out unused space — {found.RelativePath} ({archiveNumber} of {archives.Count})";
+
+                    // Throttled at the door, so 16,316 entries cost ten UI updates a second rather
+                    // than 16,316 of them. Same reason every other writer in SAFT throttles.
+                    var throttled = new ThrottledProgress<DirectInstallProgress>(packProgress);
+
                     try
                     {
-                        total += ImgArchiveEditor.Compact(found.AbsolutePath, ActivityLog.Note, speed);
+                        total += ImgArchiveEditor.Compact(
+                            found.AbsolutePath, ActivityLog.Note, speed,
+                            (done, count) => throttled.Report(new DirectInstallProgress(
+                                found.RelativePath, archiveNumber, archives.Count, stage, done, count)));
                     }
                     catch (Exception ex)
                     {
