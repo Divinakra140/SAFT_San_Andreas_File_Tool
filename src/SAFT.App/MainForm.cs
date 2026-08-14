@@ -1895,6 +1895,45 @@ public partial class MainForm : Form
                 ActivityLog.Note("uninstall: record written");
             }
 
+            // Last, once nothing else will touch these archives: give the space back.
+            //
+            // Editing in place is what makes SAFT quick, and dead space is the price. Removing an
+            // entry drops it from the directory table but leaves its bytes in the file, and restoring
+            // a small original over a large modded entry shrinks the entry and strands the remainder.
+            // Neither is reclaimed on its own, so a game that has had a heavy mod installed and taken
+            // out again keeps that space forever - measured at 149,504 bytes across six holes after a
+            // single install-and-uninstall of one small mod, every hole in the middle of the file
+            // where truncation cannot reach it.
+            //
+            // Uninstalling is exactly when someone expects the folder to get smaller, and they have
+            // already accepted a wait, so the full pass is paid here rather than on every install.
+            UninstallSubProgressText.Text = "Packing out unused space…";
+            ActivityLog.Note("uninstall: packing out unused space");
+
+            var reclaimed = await Task.Run(() =>
+            {
+                long total = 0;
+                foreach (var found in GameScanner.FindArchives(gameFolder))
+                {
+                    try
+                    {
+                        total += ImgArchiveEditor.Compact(found.AbsolutePath, ActivityLog.Note, speed);
+                    }
+                    catch (Exception ex)
+                    {
+                        // The uninstall itself has already succeeded. Failing to reclaim space must
+                        // not turn that into a failure.
+                        ActivityLog.Note($"uninstall: could not pack {found.RelativePath} - {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+
+                return total;
+            });
+
+            ActivityLog.Note(reclaimed > 0
+                ? $"uninstall: gave back {reclaimed / 1048576.0:N1} MB"
+                : "uninstall: nothing to reclaim, the archives were already packed");
+
             UninstallSubProgressText.Text = "Done.";
 
             var filesRestored = result.Archives.Sum(s => s.FilesReplaced);

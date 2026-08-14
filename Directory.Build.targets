@@ -17,6 +17,11 @@
     <Content Remove="**/._*" />
     <None Remove="**/._*" />
     <EmbeddedResource Remove="**/._*" />
+
+    <!-- The Android project's drawables live under Resources/, and pick up sidecars the same way.
+         aapt2 fails outright on a "._saft_logo.png" rather than ignoring it. -->
+    <AndroidResource Remove="**/._*" />
+    <AndroidResource Remove="**/._*/**" />
   </ItemGroup>
 
 </Project>

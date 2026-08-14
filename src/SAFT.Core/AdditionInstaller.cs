@@ -64,7 +64,8 @@ public static class AdditionInstaller
         IReadOnlyDictionary<string, string>? archiveReplacements = null,
         IReadOnlySet<string>? entriesToDrop = null,
         IReadOnlyDictionary<string, IReadOnlySet<string>>? collisionRecordsToPrune = null,
-        StorageSpeed? speed = null)
+        StorageSpeed? speed = null,
+        Action<string>? onStep = null)
     {
         // Throttled at the door, so every progress?.Report below it - including the ones passed
         // down into the private helpers - costs a UI round trip ten times a second rather than
@@ -84,7 +85,8 @@ public static class AdditionInstaller
         };
 
         var notes = AppendAssetsToArchive(
-            gameRoot, plan, record, progress, archiveReplacements, entriesToDrop, collisionRecordsToPrune, speed);
+            gameRoot, plan, record, progress, archiveReplacements, entriesToDrop, collisionRecordsToPrune,
+            speed, onStep);
         WriteMapData(gameRoot, rewritten, record, progress);
 
         // Anything the handed-over removal couldn't do is reported alongside the addition's own
@@ -104,7 +106,8 @@ public static class AdditionInstaller
         IReadOnlyDictionary<string, string>? archiveReplacements = null,
         IReadOnlySet<string>? entriesToDrop = null,
         IReadOnlyDictionary<string, IReadOnlySet<string>>? collisionRecordsToPrune = null,
-        StorageSpeed? speed = null)
+        StorageSpeed? speed = null,
+        Action<string>? onStep = null)
     {
         var notes = new List<string>();
         var archivePath = Path.Combine(gameRoot, DefaultArchiveRelativePath);
@@ -129,6 +132,15 @@ public static class AdditionInstaller
                      ?? new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase);
         if (assets.Count == 0 && plan.Collision.Count == 0 && replacements.Count == 0
             && drops.Count == 0 && prunes.Count == 0) return notes;
+
+        // EXPERIMENTAL fast path. Everything below it is the rebuild that has always been here, and it
+        // stays the fallback: if the archive cannot take this job in place, or anything about it looks
+        // unfamiliar, this returns false having touched nothing and the rebuild runs exactly as before.
+        if (UseInPlaceEditing &&
+            TryInPlace(archivePath, plan, record, assets, replacements, drops, prunes, notes, onStep))
+        {
+            return notes;
+        }
 
         var files = new List<(string Name, Func<Stream> OpenContent)>();
         var rebuiltPath = archivePath + ".saft-tmp";
@@ -229,6 +241,148 @@ public static class AdditionInstaller
         // free. The original is renamed aside, never deleted, and restored if anything goes wrong.
         FileReplace.MoveOver(rebuiltPath, archivePath);
         return notes;
+    }
+
+    /// <summary>
+    /// Whether to try editing archives in place instead of rebuilding them. EXPERIMENTAL — see
+    /// <see cref="ImgArchiveEditor"/> for what it trades away. Turn it off to get 2.0 Stable's
+    /// behaviour back exactly.
+    /// </summary>
+    public static bool UseInPlaceEditing { get; set; } = true;
+
+    /// <summary>
+    /// Does the whole job by editing the archive in place: drop the old copy's entries, repoint the
+    /// shared collision bundle at new contents, append the new entries. A few megabytes written
+    /// instead of 940.
+    ///
+    /// Feasibility is settled BEFORE anything is computed or recorded, because the fallback rebuild
+    /// does its own bookkeeping and would double-count anything written down here first. After that
+    /// point every step is one the archive can take.
+    /// </summary>
+    private static bool TryInPlace(
+        string archivePath, AdditionPlan plan, AddedMod record, IReadOnlyList<NewAsset> assets,
+        IReadOnlyDictionary<string, string> replacements, IReadOnlySet<string> drops,
+        IReadOnlyDictionary<string, IReadOnlySet<string>> prunes, List<string> notes,
+        Action<string>? onStep)
+    {
+        List<ImgEntry> entries;
+        try
+        {
+            entries = ImgArchive.ReadDirectory(archivePath).ToList();
+            if (new FileInfo(archivePath).Length % ImgEntry.SectorSize != 0) return false;
+        }
+        catch
+        {
+            return false;
+        }
+
+        var names = new HashSet<string>(entries.Select(e => e.Name), StringComparer.OrdinalIgnoreCase);
+        var dropsPresent = drops.Where(names.Contains).ToList();
+
+        // Removing frees slots, so a reinstall that takes seven out and puts seven back needs none of
+        // its own - which is exactly the case worth being fast.
+        var slotsAfterRemoval = ImgArchiveEditor.SpareSlots(archivePath) + dropsPresent.Count;
+        if (assets.Count > slotsAfterRemoval)
+        {
+            onStep?.Invoke(
+                $"archive: {assets.Count} new entry/entries needs more room than the directory has " +
+                $"({slotsAfterRemoval} free), rebuilding instead");
+            return false;
+        }
+
+        var survivingNames = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+        survivingNames.ExceptWith(dropsPresent);
+
+        foreach (var asset in assets)
+            if (survivingNames.Contains(asset.FileName)) return false;
+        foreach (var name in replacements.Keys)
+            if (!survivingNames.Contains(name)) return false;
+
+        var bundleNames = new List<string>();
+        if (plan.Collision.Count > 0 && survivingNames.Contains(SharedCollisionBundle))
+            bundleNames.Add(SharedCollisionBundle);
+        foreach (var bundle in prunes.Keys)
+            if (survivingNames.Contains(bundle) && !bundleNames.Contains(bundle, StringComparer.OrdinalIgnoreCase))
+                bundleNames.Add(bundle);
+        if (plan.Collision.Count > 0 && !bundleNames.Contains(SharedCollisionBundle, StringComparer.OrdinalIgnoreCase))
+            return false;   // the mod has collision but the bundle is missing: not a job for this path
+
+        // Past this line the archive is being changed, and every step has been checked as possible.
+        var updates = new List<(string Name, Func<Stream> OpenContent)>();
+
+        if (bundleNames.Count > 0)
+        {
+            using var archive = ImgArchive.Open(archivePath);
+            foreach (var bundleName in bundleNames)
+            {
+                var entry = archive.Entries.First(e => e.Name.Equals(bundleName, StringComparison.OrdinalIgnoreCase));
+                var before = AdditionUninstaller.ReadEntry(archive, entry);
+                var bundle = before;
+
+                // Prune before merge, for the same reason as the rebuild path: the old copy's records
+                // and the new copy's share names, and merging first makes the new ones look like
+                // duplicates of records about to be deleted.
+                if (prunes.TryGetValue(bundleName, out var recordsToPrune))
+                    bundle = AdditionUninstaller.PruneCollision(bundle, bundleName, recordsToPrune, notes, out _);
+                if (plan.Collision.Count > 0 && bundleName.Equals(SharedCollisionBundle, StringComparison.OrdinalIgnoreCase))
+                    bundle = MergeCollision(bundle, bundleName, plan.Collision, record);
+
+                // Compared by CONTENT, and by the same measure of content used everywhere else here:
+                // trailing zeros ignored, because what comes back out of an archive carries the
+                // sector padding that was added on the way in, and what has just been rebuilt in
+                // memory does not. Comparing raw bytes calls those two different and appends a
+                // duplicate copy of an unchanged bundle - growing the archive to achieve nothing. The
+                // rebuild path gets away without this check because rebuilding unchanged contents
+                // produces an identical file anyway; editing in place has no such luxury.
+                if (AdditionsManifest.ComputeSha256(bundle) != AdditionsManifest.ComputeSha256(before))
+                    updates.Add((bundleName, () => new MemoryStream(bundle, writable: false)));
+            }
+        }
+
+        foreach (var (name, path) in replacements)
+            updates.Add((name, () => File.OpenRead(path)));
+
+        if (dropsPresent.Count == 0 && updates.Count == 0 && assets.Count == 0)
+        {
+            onStep?.Invoke("archive: nothing actually changed, leaving it alone");
+            return true;
+        }
+
+        onStep?.Invoke(
+            $"archive: editing in place - {dropsPresent.Count} entry/entries out, {updates.Count} replaced, " +
+            $"{assets.Count} added (no rebuild)");
+
+        if (dropsPresent.Count > 0 &&
+            ImgArchiveEditor.TryRemove(archivePath, dropsPresent, out _) == ImgArchiveEditor.Outcome.NotPossible)
+            return false;
+
+        if (updates.Count > 0 &&
+            ImgArchiveEditor.TryReplace(archivePath, updates) == ImgArchiveEditor.Outcome.NotPossible)
+            return false;
+
+        if (assets.Count > 0)
+        {
+            var additions = assets
+                .Select(a => (a.FileName, (Func<Stream>)(() => File.OpenRead(a.SourcePath))))
+                .ToList();
+
+            if (ImgArchiveEditor.TryAppend(archivePath, additions) == ImgArchiveEditor.Outcome.NotPossible)
+                return false;
+
+            foreach (var asset in assets)
+            {
+                record.ArchiveEntries.Add(new AddedArchiveEntry
+                {
+                    ArchiveRelativePath = DefaultArchiveRelativePath,
+                    EntryName = asset.FileName,
+                    Sha256 = AdditionsManifest.ComputeSha256(asset.SourcePath),
+                });
+            }
+        }
+
+        var dead = ImgArchiveEditor.DeadBytes(archivePath) / (1024.0 * 1024.0);
+        onStep?.Invoke($"archive: edited in place; {dead:0.0} MB of the archive is now unused space");
+        return true;
     }
 
     /// <summary>

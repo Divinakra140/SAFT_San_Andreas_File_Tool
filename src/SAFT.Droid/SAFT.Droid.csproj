@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    SAFT for Android.
+
+    The same SAFT.Core the Windows build uses - every format, every installer, all 288 tests - built
+    for ARM64 instead of run through Wine on top of box64. Nothing in Core needed Windows; only the
+    WinForms front end did, which is why this is a new face on a working engine rather than a rewrite.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-android34.0</TargetFramework>
+    <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <ApplicationId>com.divinakra.saft</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.1</ApplicationDisplayVersion>
+
+    <!--
+      ARM64 only. Every device this is for - the Retroid, and anything else running GTA SA under an
+      emulator - is arm64, and building the other architectures triples the build time for nothing.
+    -->
+    <RuntimeIdentifiers>android-arm64</RuntimeIdentifiers>
+
+    <!--
+      Ahead-of-time compilation is OFF for now, and not because it is unwanted - given four days
+      spent watching a JIT struggle under emulation, precompiled code is exactly what this port
+      should eventually ship. It is off because the Android SDK's assembler wrapper is a shell
+      script that builds a path unquoted, so the space in "San Andreas" makes it look for a
+      program at /Volumes/Untitled/as and give up.
+
+      Fixing it properly means moving the .NET SDK somewhere without a space in the path. That is
+      worth doing before release; it is not worth doing before we know the engine runs at all.
+    -->
+    <RunAOTCompilation>false</RunAOTCompilation>
+
+    <!--
+      Trimming is OFF while we find out why the app would not start.
+
+      A Release Android build normally runs the linker over the assemblies and removes what it can
+      prove is unreachable. "Can prove" is the catch: SAFT.Core reads file formats, and code reached
+      only through reflection or a generic instantiation the linker cannot see is code the linker
+      will happily delete - producing an app that installs, launches, and dies before it draws.
+
+      That makes the linker a suspect, and a suspect is worth removing from the scene rather than
+      reasoning about. If the app starts with this off, we know what it was and can preserve the
+      right types deliberately. If it still fails, the linker was never involved and the crash log
+      says what is.
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <AndroidLinkMode>None</AndroidLinkMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The repo's own Core, not a copy elsewhere on disk. Whichever engine ships on Windows is the one
+      that ships on Android - which is the entire premise of this port, and impossible to hold to
+      while the reference pointed at a working copy outside version control.
+    -->
+    <ProjectReference Include="..\SAFT.Core\SAFT.Core.csproj" />
+  </ItemGroup>
+
+</Project>

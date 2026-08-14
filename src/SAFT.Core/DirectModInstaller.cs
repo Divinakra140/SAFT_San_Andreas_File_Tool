@@ -586,7 +586,10 @@ public static class DirectModInstaller
             {
                 PatchArchiveInPlace(archiveAbsolutePath, group,
                     (done, total) => progress?.Report(new DirectInstallProgress(
-                        archiveRelativePath, archiveIndex, totalGroups, "Patching in place", done, total)));
+                        archiveRelativePath, archiveIndex, totalGroups, "Patching in place", done, total)),
+                    missing => onStep?.Invoke(
+                        $"apply: '{missing}' is no longer in {archiveRelativePath}, so there is nothing to " +
+                        "put back - skipped"));
             }
 
             summaries.Add(new DirectInstallSummary(archiveRelativePath, group.Count, needsRebuild));
@@ -815,7 +818,13 @@ public static class DirectModInstaller
     /// leftover space up to the original allocation. The directory table (offsets, sizes, order)
     /// never changes, since by construction every replacement fits within what was already there.
     /// </summary>
-    private static void PatchArchiveInPlace(string archiveAbsolutePath, IReadOnlyList<DirectInstallMatch> matches, Action<int, int>? onProgress)
+    /// <param name="onMissing">
+    /// Told about any planned entry that is no longer in the archive. See below for why that is a
+    /// normal thing to happen rather than an error.
+    /// </param>
+    private static void PatchArchiveInPlace(
+        string archiveAbsolutePath, IReadOnlyList<DirectInstallMatch> matches, Action<int, int>? onProgress,
+        Action<string>? onMissing = null)
     {
         // The directory INDEX is carried along, not just the entry: a replacement that is smaller
         // than what it replaces has to shrink that entry's size field, and the field's position in
@@ -823,20 +832,36 @@ public static class DirectModInstaller
         List<(int Index, ImgEntry Entry, string ModFilePath)> targets;
         using (var archive = ImgArchive.Open(archiveAbsolutePath))
         {
-            targets = matches
-                .Select(m =>
+            // Looked up by name once rather than scanned per match: 16,000 entries against a plan of
+            // a few hundred was quadratic for no reason.
+            var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < archive.Entries.Count; i++) byName.TryAdd(archive.Entries[i].Name, i);
+
+            targets = new List<(int, ImgEntry, string)>(matches.Count);
+            foreach (var match in matches)
+            {
+                // An entry named in the plan that is NOT in the archive is skipped, not fatal.
+                //
+                // This is a real situation, not a corrupt-file case. An uninstall plans its restores
+                // from the backup folder and then removes SAFT's added objects BEFORE applying them —
+                // and a reinstall will have backed up those added assets as though they were
+                // originals, because by then they were already in the archive. So the plan asks to
+                // restore something the removal has just taken out. Skipping is not merely tolerant,
+                // it is correct: putting it back would reinstate an asset the user asked to remove.
+                //
+                // This used to index the list with the -1 from a failed search, so the whole uninstall
+                // died with "Index was out of range" and nothing was restored at all.
+                if (!byName.TryGetValue(match.EntryName, out var index))
                 {
-                    var index = -1;
-                    for (var i = 0; i < archive.Entries.Count; i++)
-                    {
-                        if (!archive.Entries[i].Name.Equals(m.EntryName, StringComparison.OrdinalIgnoreCase)) continue;
-                        index = i;
-                        break;
-                    }
-                    return (Index: index, Entry: archive.Entries[index], m.ModFilePath);
-                })
-                .ToList();
+                    onMissing?.Invoke(match.EntryName);
+                    continue;
+                }
+
+                targets.Add((index, archive.Entries[index], match.ModFilePath));
+            }
         } // read handle must close before we reopen the same path for writing
+
+        if (targets.Count == 0) return;
 
         // Patching in place leaves the directory table untouched, so a cached copy stays correct —
         // but this is not the place to be clever about that. See ImgArchive.Write.

@@ -1,0 +1,33 @@
+<Project>
+
+  <!--
+    The repo's own rules first. MSBuild only imports the NEAREST Directory.Build.props walking up, so
+    without this line the one at the repo root would simply not apply to this project.
+  -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!--
+    Build somewhere macOS is not fighting us.
+
+    This repo lives on an exFAT volume, and macOS cannot store extended attributes there, so it
+    writes a companion "._Whatever" file next to anything that has them. Harmless for most tools.
+    Not harmless here: the Android build generates Java source into obj/ and then hands javac
+    everything matching *.java in that folder - including ._MainActivity.java, which is not Java at
+    all but a binary resource fork, and which javac rejects one null byte at a time for several
+    hundred lines.
+
+    The repo's "._*" item exclusions do not help, because that glob happens inside the Android SDK's
+    own targets rather than in ours. So instead of removing the files after they appear, we build
+    where they never appear: a folder on the machine's own disk.
+
+    Only the throwaway folders move. Source stays here with the rest of SAFT, and the APK is copied
+    back out when it is finished. On a machine whose checkout is NOT on exFAT this is harmless - it
+    just puts obj/ somewhere else.
+  -->
+  <PropertyGroup>
+    <SaftBuildRoot>$(HOME)/saft-android-build/$(MSBuildProjectName)/</SaftBuildRoot>
+    <BaseIntermediateOutputPath>$(SaftBuildRoot)obj/</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(SaftBuildRoot)bin/</BaseOutputPath>
+  </PropertyGroup>
+
+</Project>

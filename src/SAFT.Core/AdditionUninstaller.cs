@@ -152,9 +152,9 @@ public static class AdditionUninstaller
                 continue;
             }
 
-            onStep?.Invoke($"removal: rewriting {archiveRelativePath} without {names.Count} entry/entries");
+            onStep?.Invoke($"removal: taking {names.Count} entry/entries out of {archiveRelativePath}");
             entriesRemoved += RebuildArchiveWithout(
-                gameRoot, archiveRelativePath, names, collisionToRemove, skipped, progress, speed);
+                gameRoot, archiveRelativePath, names, collisionToRemove, skipped, progress, speed, onStep);
         }
 
         // A mod only leaves the record once nothing of it is left in the game.
@@ -270,9 +270,8 @@ public static class AdditionUninstaller
         catch (Exception ex)
         {
             // One failure to read the archive answers for every entry in it - the same message each
-            // entry would have reported on its own.
-            // They stay on the record, because an archive that could not be opened has told us
-            // nothing about what is inside it.
+            // entry would have reported on its own. They stay on the record, because an archive that
+            // could not be opened has told us nothing about what is inside it.
             foreach (var entry in entries)
             {
                 skipped.Add($"{entry.EntryName}: {ex.Message}");
@@ -336,10 +335,20 @@ public static class AdditionUninstaller
         IReadOnlyDictionary<string, HashSet<string>> collisionToRemove,
         List<string> skipped,
         IProgress<AdditionProgress>? progress,
-        StorageSpeed? speed = null)
+        StorageSpeed? speed = null,
+        Action<string>? onStep = null)
     {
         var archivePath = Path.Combine(gameRoot, archiveRelativePath);
         if (!File.Exists(archivePath)) return 0;
+
+        // EXPERIMENTAL fast path. Taking entries out needs no rebuild at all: the records come out of
+        // the directory table and the data is simply left behind as dead space. Everything below this
+        // is the rebuild that has always been here, and it still runs whenever the fast path declines.
+        if (AdditionInstaller.UseInPlaceEditing &&
+            TryRemoveInPlace(archivePath, archiveRelativePath, names, collisionToRemove, skipped, onStep, out var takenOut))
+        {
+            return takenOut;
+        }
 
         var keep = new List<(string Name, Func<Stream> OpenContent)>();
         var removed = 0;
@@ -390,6 +399,87 @@ public static class AdditionUninstaller
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
         return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// Takes the entries out without rebuilding: their records leave the directory table, their data
+    /// stays behind as dead space, and any shared collision bundle is repointed at a pruned copy.
+    ///
+    /// Uninstalling was the half of this that never got done. Installing was made to write a few
+    /// megabytes instead of 940 and removing was left rebuilding the whole archive, which is why
+    /// taking a mod off was still slow - and slow in the way that fills an SD card's write buffer and
+    /// makes everything else on the device crawl.
+    /// </summary>
+    private static bool TryRemoveInPlace(
+        string archivePath, string archiveRelativePath, ISet<string> names,
+        IReadOnlyDictionary<string, HashSet<string>> collisionToRemove, List<string> skipped,
+        Action<string>? onStep, out int removed)
+    {
+        removed = 0;
+
+        List<ImgEntry> entries;
+        try
+        {
+            entries = ImgArchive.ReadDirectory(archivePath).ToList();
+            if (new FileInfo(archivePath).Length % ImgEntry.SectorSize != 0) return false;
+        }
+        catch
+        {
+            return false;
+        }
+
+        var present = new HashSet<string>(entries.Select(e => e.Name), StringComparer.OrdinalIgnoreCase);
+        var toRemove = names.Where(present.Contains).ToList();
+
+        // Only bundles that are actually here, and only if pruning them changes anything.
+        var prunedBundles = new List<(string Name, Func<Stream> OpenContent)>();
+        if (collisionToRemove.Count > 0)
+        {
+            using var archive = ImgArchive.Open(archivePath);
+            foreach (var (bundleName, records) in collisionToRemove)
+            {
+                var entry = archive.Entries.FirstOrDefault(
+                    e => e.Name.Equals(bundleName, StringComparison.OrdinalIgnoreCase));
+                if (entry is null) continue;
+                if (toRemove.Contains(bundleName, StringComparer.OrdinalIgnoreCase)) continue;
+
+                var before = ReadEntry(archive, entry);
+                var pruned = PruneCollision(before, bundleName, records, skipped, out var count);
+                if (count == 0) continue;
+
+                // Same measure of "changed" as the installer uses: trailing zeros ignored, because
+                // what comes out of an archive carries its sector padding and what was just rebuilt
+                // in memory does not.
+                if (AdditionsManifest.ComputeSha256(pruned) != AdditionsManifest.ComputeSha256(before))
+                    prunedBundles.Add((bundleName, () => new MemoryStream(pruned, writable: false)));
+            }
+        }
+
+        if (toRemove.Count == 0 && prunedBundles.Count == 0)
+        {
+            onStep?.Invoke($"removal: nothing left to take out of {archiveRelativePath}");
+            return true;
+        }
+
+        onStep?.Invoke(
+            $"removal: editing {archiveRelativePath} in place - {toRemove.Count} entry/entries out, " +
+            $"{prunedBundles.Count} collision bundle(s) pruned (no rebuild)");
+
+        if (toRemove.Count > 0)
+        {
+            if (ImgArchiveEditor.TryRemove(archivePath, toRemove, out removed) == ImgArchiveEditor.Outcome.NotPossible)
+                return false;
+        }
+
+        if (prunedBundles.Count > 0 &&
+            ImgArchiveEditor.TryReplace(archivePath, prunedBundles) == ImgArchiveEditor.Outcome.NotPossible)
+        {
+            return false;
+        }
+
+        var dead = ImgArchiveEditor.DeadBytes(archivePath) / (1024.0 * 1024.0);
+        onStep?.Invoke($"removal: done in place; {dead:0.0} MB of {archiveRelativePath} is now unused space");
+        return true;
     }
 
     /// <summary>

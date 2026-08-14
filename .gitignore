@@ -10,3 +10,13 @@ publish/
 # SAFT is the two-tab build; SAFT Dev is the same source with -p:ModDev=true.
 SAFT/
 SAFT Dev/
+
+# The Android APK build output, and the signing key.
+#
+# The key is the app's permanent identity to Android - install an update signed with a different one
+# and it simply fails, so every user would have to uninstall to move forward. It lives outside this
+# repo entirely; these lines are the second line of defence.
+apk/
+*.keystore
+*.jks
+password.txt

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    All-files access is the whole reason a sideloaded APK can do this job at all. SAFT rewrites
+    940 MB archives in place; Android's document framework would make that unusably slow, and it
+    cannot reach a game folder the user chose anyway. This permission gives ordinary file access to
+    both internal shared storage and a removable SD card, which is where the game usually lives.
+
+    It is also why this app is not a Play Store app: Google restricts this permission to file
+    managers and similar. For a modding tool distributed on GitHub that is not a real constraint.
+  -->
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+
+  <!--
+    The launcher icon is the blackletter S, on white — the mark, not the tool logo. The swiss army
+    knife belongs inside the app where there is room to read it; at the size Android draws a home
+    screen icon, twelve overlapping blades become a smudge.
+  -->
+  <!--
+    android:name points at SaftApplication, whose only job is to install the crash handlers before
+    any activity exists. It has to be named HERE: this element is written by hand, so it wins over
+    the [Application] attribute in the C#, and without the name that class is simply never used -
+    which was true for one build, silently.
+
+    The crc64... prefix is not arbitrary and not ours to choose: .NET Android derives it from the
+    namespace, so every type in SAFT.Droid lands in that same generated Java package. It is stable
+    as long as the namespace is. If the namespace ever changes, this line changes with it.
+  -->
+  <application
+    android:name="crc64662697f02d4601a8.SaftApplication"
+    android:label="SAFT"
+    android:icon="@drawable/saft_icon"
+    android:requestLegacyExternalStorage="true" />
+</manifest>

@@ -28,6 +28,70 @@ public class DirectModInstallerTests
     }
 
     /// <summary>
+    /// A plan can name an entry that is no longer in the archive by the time it is applied, and that
+    /// must not be fatal.
+    ///
+    /// This is exactly how uninstall works: it plans its restores from the backup folder, then removes
+    /// SAFT's added objects, THEN applies the plan. A reinstall will have backed up those added assets
+    /// as though they were originals — they were in the archive by then — so the plan asks to restore
+    /// something the removal has just taken out.
+    ///
+    /// It used to index the entry list with the -1 from the failed search, so the entire uninstall died
+    /// with "Index was out of range" and nothing at all was restored. Skipping is not just tolerant, it
+    /// is the correct answer: putting the entry back would reinstate an asset the user asked to remove.
+    /// </summary>
+    [Fact]
+    public void Skips_a_planned_entry_that_has_since_been_removed_from_the_archive()
+    {
+        // 'ghost.dff' stands in for an asset SAFT added: in the archive when the plan is made, and
+        // backed up as though it were an original, exactly as a reinstall would leave it.
+        var gameRoot = TestScratch.NewDir();
+        Directory.CreateDirectory(Path.Combine(gameRoot, "models"));
+        File.WriteAllText(Path.Combine(gameRoot, "gta_sa.exe"), "stub");
+
+        var archivePath = Path.Combine(gameRoot, "models", "gta3.img");
+        ImgArchive.Write(archivePath, new[]
+        {
+            File_("banshee.dff", "modded car model"),
+            File_("ghost.dff", "an asset SAFT added"),
+        });
+
+        var backupFolder = TestScratch.NewDir();
+        File.WriteAllText(Path.Combine(backupFolder, "banshee.dff"), "vanilla car model");
+        File.WriteAllText(Path.Combine(backupFolder, "ghost.dff"), "an asset SAFT added");
+
+        var plan = DirectModInstaller.Plan(gameRoot, backupFolder);
+        Assert.Contains(plan.Matches, m => m.EntryName.Equals("ghost.dff", StringComparison.OrdinalIgnoreCase));
+
+        // Rewritten without 'ghost.dff' AFTER the plan was made - standing in for the addition
+        // removal that runs between planning and applying.
+        using (var archive = ImgArchive.Open(archivePath))
+        {
+            var kept = archive.Entries
+                .Where(e => !e.Name.Equals("ghost.dff", StringComparison.OrdinalIgnoreCase))
+                .Select(e => (e.Name, (Func<Stream>)(() => archive.OpenEntry(e))))
+                .ToList();
+            ImgArchive.Write(archivePath + ".rebuilt", kept);
+        }
+
+        File.Delete(archivePath);
+        File.Move(archivePath + ".rebuilt", archivePath);
+        ImgArchive.ClearCaches();
+
+        var steps = new List<string>();
+        var result = DirectModInstaller.Apply(plan, backupOutputFolder: null, onStep: steps.Add);
+
+        // It did not throw, it said which entry it skipped, and the real restore still happened.
+        Assert.Contains(steps, s => s.Contains("ghost.dff") && s.Contains("nothing to put back"));
+
+        using var patched = ImgArchive.Open(archivePath);
+        var banshee = patched.Entries.Single(e => e.Name == "banshee.dff");
+        using var reader = new StreamReader(patched.OpenEntry(banshee));
+        Assert.StartsWith("vanilla car model", reader.ReadToEnd());
+        Assert.DoesNotContain(patched.Entries, e => e.Name.Equals("ghost.dff", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Uninstalling a heavy pack crashed SAFT. Restoring a small vanilla file into the slot its large
     /// modded replacement had grown to left a multi-megabyte gap to zero-fill, and that fill was one
     /// allocation the size of the gap — 27.6 MB in the measured case, on a 32-bit heap.
